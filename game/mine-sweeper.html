@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>扫雷</title>
+<style>
+  :root{
+    --cell:44px;
+    --bg:#1e2329;
+    --panel:#2a313a;
+    --line:#3a4450;
+    --num:#e6ecf3;
+    --danger:#ff5d5d;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:24px;
+    background:var(--bg);
+    font-family:"Segoe UI", system-ui, -apple-system, sans-serif;
+    color:var(--num);
+    display:flex; flex-direction:column; align-items:center; gap:18px;
+  }
+  h1{ margin:0; font-size:26px; font-weight:600; letter-spacing:1px }
+  .controls{
+    display:flex; gap:14px; align-items:center; flex-wrap:wrap;
+    background:var(--panel); padding:10px 14px; border-radius:10px;
+  }
+  .controls label{ font-size:14px; }
+  select{
+    background:#20262e; color:var(--num);
+    border:1px solid var(--line); border-radius:6px;
+    padding:6px 10px; font-size:14px;
+  }
+  button{
+    background:#3f4a58; color:var(--num);
+    border:none; border-radius:8px;
+    padding:8px 16px; font-size:14px; cursor:pointer;
+  }
+  button:hover{ background:#4a5666 }
+  button.active{ background:#8ee98e; color:#1e2329 }
+  .stats{
+    display:flex; gap:22px; background:var(--panel);
+    padding:10px 16px; border-radius:10px; font-size:15px;
+  }
+  .stats .stat b{ margin:0 4px; font-weight:700 }
+  .grid{
+    display:grid; gap:2px;
+    background:var(--panel); padding:6px; border-radius:10px;
+  }
+  .cell{
+    width:var(--cell); height:var(--cell);
+    display:flex; align-items:center; justify-content:center;
+    background:#333c46; border:1px solid var(--line);
+    border-radius:4px; cursor:pointer; user-select:none;
+    transition:background .12s, color .12s;
+    font-weight:700; font-size:18px;
+  }
+  .cell.revealed{ background:#22282f; cursor:default }
+  .cell.mine{ background:#241a1e; color:var(--danger) }
+  .cell.flag{ color:var(--danger) }
+  .cell.flag-wrong{ background:#3a1520; color:var(--danger) }
+  .cell.flag-correct{ background:#1e3a2a; color:#8ee98e }
+  .cell.hint{ background:#3f4a58 }
+  .cell.busted{ background:var(--danger); color:#fff }
+  .grid.lost{ border-color:var(--danger) }
+  .msg{ font-size:16px; min-height:22px; color:#c9d4e0 }
+  .msg.win{ color:#8ee98e }
+  .msg.lose{ color:var(--danger) }
+</style>
+</head>
+<body>
+  <h1>💣 扫雷</h1>
+  <div class="controls">
+    <label>难度：
+      <select id="difficulty">
+        <option value="9 9 10" selected>初级 (9×9 / 10雷)</option>
+        <option value="16 16 40">中级 (16×16 / 40雷)</option>
+        <option value="30 30 99">高级 (30×30 / 99雷)</option>
+      </select>
+    </label>
+    <button id="reset">重新开始</button>
+    <button id="markBtn">🚩 标记</button>
+    <button id="questionBtn">? 问号</button>
+  </div>
+
+  <div class="stats">
+    <span class="stat">🚩 雷: <b id="minesLeft">0</b></span>
+    <span class="stat">⏱ 时间: <b id="time">0</b>s</span>
+  </div>
+
+  <div class="grid" id="grid"></div>
+  <div class="msg" id="msg"></div>
+
+<script>
+(function(){
+  const gridEl = document.getElementById('grid');
+  const msgEl  = document.getElementById('msg');
+  const minesLeftEl = document.getElementById('minesLeft');
+  const timeEl = document.getElementById('time');
+  const diffEl = document.getElementById('difficulty');
+  const resetBtn = document.getElementById('reset');
+  const markBtn = document.getElementById('markBtn');
+  const questionBtn = document.getElementById('questionBtn');
+  let mode = null; // null | 'flag' | 'question'
+
+  let rows, cols, totalMines, mines;
+  let revealed, mark, won, lost, firstClick;
+  let timer = null, seconds = 0;
+
+  function parseDiff(v){ const p = v.split(' '); const r = +p[0], c = +p[1], m = +p[2]; if(!r||!c||!m) throw new Error('无效的难度设置'); return { rows:r, cols:c, mines:m }; }
+
+  function fitBoard(){
+    const availW = Math.max(200, window.innerWidth - 60);
+    const availH = Math.max(200, window.innerHeight - 300);
+    const maxW = Math.floor((availW - (cols-1)*2 - 12) / cols);
+    const maxH = Math.floor((availH - (rows-1)*2 - 12) / rows);
+    const size = Math.min(44, maxW, maxH);
+    gridEl.style.setProperty('--cell', Math.max(16, size) + 'px');
+  }
+
+  function init(){
+    const d = parseDiff(diffEl.value);
+    rows = d.rows; cols = d.cols; totalMines = d.mines;
+    won = false; lost = false; firstClick = true;
+    mines = [];
+    revealed = Array.from({length:rows}, () => Array(cols).fill(false));
+    mark = Array.from({length:rows}, () => Array(cols).fill(0));
+    seconds = 0;
+    clearInterval(timer); timer = null;
+    timeEl.textContent = '0';
+    minesLeftEl.textContent = totalMines;
+    msgEl.textContent = '';
+    msgEl.className = 'msg';
+    gridEl.classList.remove('lost');
+    gridEl.style.gridTemplateColumns = `repeat(${cols}, var(--cell))`;
+    gridEl.innerHTML = '';
+    for(let r=0; r<rows; r++){
+      for(let c=0; c<cols; c++){
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+        cell.dataset.r = r;
+        cell.dataset.c = c;
+        cell.addEventListener('click', e => { e.stopPropagation(); onClick(r,c); });
+        cell.addEventListener('contextmenu', e => { e.preventDefault(); onFlag(r,c); });
+        gridEl.appendChild(cell);
+      }
+    }
+    fitBoard();
+  }
+
+  function cellAt(r,c){ return gridEl.children[r*cols+c]; }
+
+  function placeMines(start){
+    const spots = [];
+    for(let r=0; r<rows; r++) for(let c=0; c<cols; c++) spots.push([r,c]);
+    const s = [start[0], start[1]];
+    spots.splice(spots.findIndex(p => p[0]===s[0] && p[1]===s[1]), 1);
+    for(let i=0; i<totalMines; i++){
+      const idx = Math.floor(Math.random()*spots.length);
+      mines.push(spots[idx]);
+      spots.splice(idx,1);
+    }
+  }
+
+  function mineAt(r,c){ return mines.some(m => m[0]===r && m[1]===c); }
+
+  function countAround(r,c){
+    let n = 0;
+    for(let dr=-1; dr<=1; dr++) for(let dc=-1; dc<=1; dc++){
+      if(dr===0 && dc===0) continue;
+      const nr = r+dr, nc = c+dc;
+      if(nr<0||nc<0||nr>=rows||nc>=cols) continue;
+      if(mineAt(nr,nc)) n++;
+    }
+    return n;
+  }
+
+  function renderCell(r,c){
+    const el = cellAt(r,c);
+    el.className = 'cell';
+    const mk = mark[r][c];
+    if(mk===1) el.classList.add('flag');
+    if(revealed[r][c]){
+      el.classList.add('revealed');
+      const m = mineAt(r,c);
+      if(m){ el.classList.add('mine'); el.textContent='💣'; }
+      else{ const n = countAround(r,c); el.textContent = n > 0 ? n : ''; }
+    } else if(mk===1){
+      el.textContent = '🚩';
+    } else if(mk===2){
+      el.textContent = '?';
+    } else {
+      el.textContent = '';
+    }
+    return el;
+  }
+
+  function revealArea(r,c){
+    const seen = new Set();
+    const q = [[r,c]];
+    while(q.length){
+      const [cr,cc] = q.pop();
+      const key = cr*cols+cc;
+      if(seen.has(key)) continue;
+      seen.add(key);
+      if(mark[cr][cc] === 1 || revealed[cr][cc]) continue;
+      revealed[cr][cc] = true;
+      const el = cellAt(cr,cc);
+      el.classList.add('revealed');
+      const m = mineAt(cr,cc);
+      if(m){
+        el.classList.add('busted');
+        el.textContent='💥';
+        lose();
+        return;
+      }
+      const n = countAround(cr,cc);
+      el.textContent = n > 0 ? n : '';
+      // flood open zero-cells
+      if(n===0){
+        for(let dr=-1; dr<=1; dr++) for(let dc=-1; dc<=1; dc++){
+          const nr=cr+dr, nc=cc+dc;
+          if(nr<0||nc<0||nr>=rows||nc>=cols) continue;
+          if(mark[nr][nc] !== 1) q.push([nr,nc]);
+        }
+      }
+    }
+    checkWin();
+  }
+
+  function onClick(r,c){
+    if(lost || won) return;
+    if(mode === 'flag'){
+      // 标记按钮激活：点击在🚩↔无间切换（不经过?）
+      if(revealed[r][c]) return;
+      if(mark[r][c] === 2) return;
+      mark[r][c] = mark[r][c] === 1 ? 0 : 1;
+      minesLeftEl.textContent = Math.max(0, totalMines - flagCount());
+      renderCell(r,c);
+      return;
+    }
+    if(mode === 'question'){
+      // 问号按钮激活：点击在?↔无间切换（不经过🚩）
+      if(revealed[r][c]) return;
+      if(mark[r][c] === 1) return;
+      mark[r][c] = mark[r][c] === 2 ? 0 : 2;
+      minesLeftEl.textContent = Math.max(0, totalMines - flagCount());
+      renderCell(r,c);
+      return;
+    }
+    if(mark[r][c] === 1) return;
+    if(firstClick){
+      firstClick = false;
+      placeMines([r,c]);
+      for(let i=0; i<rows; i++) for(let j=0; j<cols; j++) renderCell(i,j);
+      timer = setInterval(()=>{ seconds++; timeEl.textContent = seconds; }, 1000);
+    }
+    if(!revealed[r][c]){
+      revealArea(r,c);
+    }
+  }
+
+  function onFlag(r,c){
+    if(lost || won) return;
+    if(revealed[r][c]) return;
+    mark[r][c] = (mark[r][c] + 1) % 3;
+    minesLeftEl.textContent = Math.max(0, totalMines - flagCount());
+    renderCell(r,c);
+  }
+
+  function flagCount(){
+    let n=0; for(let i=0; i<rows; i++) for(let j=0; j<cols; j++) if(mark[i][j] === 1) n++;
+    return n;
+  }
+
+  function lose(){
+    lost = true;
+    clearInterval(timer);
+    gridEl.classList.add('lost');
+    for(let i=0; i<rows; i++) for(let j=0; j<cols; j++){
+      const el = cellAt(i,j);
+      const mk = mark[i][j];
+      const m = mineAt(i,j);
+      if(m){
+        // 雷格：标记保留🚩，问号显示✔️，未标记显示💣
+        if(mk === 1){
+          el.className = 'cell flag';
+          el.textContent = '🚩';
+        } else if(mk === 2){
+          el.className = 'cell flag-correct';
+          el.textContent = '✔️';
+        } else {
+          el.className = 'cell mine';
+          el.textContent = '💣';
+        }
+      } else if(mk === 1){
+        // 非雷格但被标记：显示❌（标记错误）
+        el.className = 'cell flag-wrong';
+        el.textContent = '❌';
+      } else if(mk === 2){
+        // 非雷格但被问号标记：显示❌（标记错误）
+        el.className = 'cell flag-wrong';
+        el.textContent = '❌';
+      } else if(!revealed[i][j]){
+        // 未翻开且未标记的安全格：公开并显示数字
+        el.className = 'cell revealed';
+        const n = countAround(i,j);
+        el.textContent = n > 0 ? n : '';
+      }
+      // 已翻开的安全格：保持现有数字，不做任何改变
+    }
+    msgEl.textContent = '💥 你踩到了地雷，游戏结束。';
+    msgEl.className = 'msg lose';
+  }
+
+  function checkWin(){
+    let count = 0;
+    for(let i=0; i<rows; i++) for(let j=0; j<cols; j++) if(revealed[i][j]) count++;
+    if(count === rows*cols - totalMines){
+      won = true;
+      clearInterval(timer);
+      msgEl.textContent = `🎉 胜利！用时 ${seconds} 秒。`;
+      msgEl.className = 'msg win';
+      minesLeftEl.textContent = '0';
+    }
+  }
+
+  markBtn.addEventListener('click', () => {
+    if(mode === 'flag'){
+      mode = null;
+      markBtn.classList.remove('active');
+    } else {
+      mode = 'flag';
+      markBtn.classList.add('active');
+      questionBtn.classList.remove('active');
+    }
+  });
+  questionBtn.addEventListener('click', () => {
+    if(mode === 'question'){
+      mode = null;
+      questionBtn.classList.remove('active');
+    } else {
+      mode = 'question';
+      questionBtn.classList.add('active');
+      markBtn.classList.remove('active');
+    }
+  });
+
+  resetBtn.addEventListener('click', init);
+  diffEl.addEventListener('change', init);
+  window.addEventListener('resize', fitBoard);
+  init();
+})();
+</script>
+</body>
+</html>

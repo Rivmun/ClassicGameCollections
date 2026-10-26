@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>黑白棋 Othello</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  background: #0f1923;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100vh;
+  padding: 20px;
+  color: #e0e0e0;
+}
+h1 { font-size: 28px; margin-bottom: 6px; letter-spacing: 2px; }
+.subtitle { font-size: 13px; opacity: 0.5; margin-bottom: 14px; }
+
+/* 计分板 */
+.scoreboard {
+  display: flex;
+  gap: 32px;
+  margin-bottom: 14px;
+  font-size: 20px;
+}
+.score-item { display: flex; align-items: center; gap: 8px; }
+.score-disc {
+  width: 28px; height: 28px; border-radius: 50%;
+  display: inline-block;
+}
+.score-disc.black { background: #2c2c2c; border: 2px solid #555; }
+.score-disc.white { background: #f0f0f0; border: 2px solid #aaa; }
+.score-num { font-weight: bold; font-size: 24px; min-width: 28px; text-align: center; }
+
+/* 棋盘 */
+.board {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  background: #1a5c3a;
+  padding: 4px;
+  border-radius: 6px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+.cell {
+  width: 52px; height: 52px;
+  background: #2d8a56;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.15s;
+}
+.cell:hover { background: #3a9e66; }
+.cell.has-piece:hover { background: #2d8a56; cursor: default; }
+
+/* 棋子 */
+.piece {
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  perspective: 200px;
+  position: relative;
+}
+.piece-inner {
+  width: 100%; height: 100%;
+  border-radius: 50%;
+  position: absolute;
+  transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+  backface-visibility: hidden;
+}
+.piece-inner.black-face {
+  background: radial-gradient(circle at 35% 35%, #444, #111);
+  transform: rotateX(0deg);
+  z-index: 2;
+}
+.piece-inner.white-face {
+  background: radial-gradient(circle at 35% 35%, #fff, #ccc);
+  transform: rotateX(180deg);
+  z-index: 1;
+}
+.piece.white .piece-inner.black-face { transform: rotateX(180deg); z-index: 1; }
+.piece.white .piece-inner.white-face { transform: rotateX(0deg); z-index: 2; }
+.piece.flipping .piece-inner.black-face { transform: rotateX(180deg); }
+.piece.flipping .piece-inner.white-face { transform: rotateX(360deg); }
+.piece.flip-to-black .piece-inner.black-face { transform: rotateX(0deg); z-index: 2; }
+.piece.flip-to-black .piece-inner.white-face { transform: rotateX(180deg); z-index: 1; }
+.piece.flip-to-white .piece-inner.black-face { transform: rotateX(180deg); z-index: 1; }
+.piece.flip-to-white .piece-inner.white-face { transform: rotateX(0deg); z-index: 2; }
+
+/* 落子提示 */
+.cell .hint-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.4);
+  position: absolute;
+  pointer-events: none;
+}
+
+/* AI 落子高亮 */
+@keyframes ai-pulse {
+  0% { box-shadow: inset 0 0 0 3px #ffd700; }
+  100% { box-shadow: inset 0 0 0 0px transparent; }
+}
+.cell.ai-move { animation: ai-pulse 1.2s ease-out; }
+
+/* 动画：棋子放置 */
+@keyframes place-piece {
+  0% { transform: scale(0.3); opacity: 0; }
+  60% { transform: scale(1.1); }
+  100% { transform: scale(1); opacity: 1; }
+}
+.piece.placing { animation: place-piece 0.3s ease-out; }
+
+/* 状态文字 */
+.status {
+  margin-top: 14px;
+  font-size: 16px;
+  height: 24px;
+  transition: opacity 0.3s;
+}
+
+/* 控制区 */
+.controls { display: flex; gap: 12px; margin-top: 12px; }
+.btn {
+  padding: 8px 20px;
+  border: none; border-radius: 4px;
+  background: #4a90d9; color: #fff;
+  font-size: 14px; cursor: pointer;
+  transition: background 0.2s;
+}
+.btn:hover { background: #357abd; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn.danger { background: #c0392b; }
+.btn.danger:hover { background: #a93226; }
+
+/* 开局面板 */
+.setup {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 12px;
+  padding: 28px 36px;
+  text-align: center;
+}
+.setup h2 { font-size: 20px; margin-bottom: 18px; font-weight: 600; }
+.setup-row { margin-bottom: 16px; }
+.setup-label { font-size: 13px; opacity: 0.6; margin-bottom: 8px; text-align: left; display: block; }
+.choice-group { display: flex; gap: 10px; justify-content: center; }
+.choice-btn {
+  padding: 10px 18px;
+  border: 2px solid #4a90d9;
+  background: transparent;
+  color: #e0e0e0;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s;
+}
+.choice-btn:hover { background: rgba(74,144,217,0.2); }
+.choice-btn.selected { background: #4a90d9; color: #fff; border-color: #4a90d9; }
+
+/* 结果 */
+.result {
+  margin-top: 16px;
+  padding: 14px 28px;
+  border-radius: 8px;
+  font-size: 18px;
+  font-weight: bold;
+  display: none;
+}
+.result.win { background: rgba(46, 204, 113, 0.15); color: #2ecc71; display: block; }
+.result.lose { background: rgba(231, 76, 60, 0.15); color: #e74c3c; display: block; }
+.result.draw { background: rgba(241, 196, 15, 0.15); color: #f1c40f; display: block; }
+
+/* 难度指示 */
+.diff-indicator {
+  margin-top: 8px;
+  font-size: 12px;
+  opacity: 0.5;
+}
+</style>
+</head>
+<body>
+
+<h1>黑白棋</h1>
+<div class="subtitle">Othello — 翻转你的对手</div>
+
+<!-- 开局面板 -->
+<div id="setup" class="setup">
+  <h2>对局设置</h2>
+  <div class="setup-row">
+    <span class="setup-label">难度</span>
+    <div class="choice-group" id="diff-group">
+      <button class="choice-btn" data-diff="easy">简单</button>
+      <button class="choice-btn selected" data-diff="medium">中等</button>
+      <button class="choice-btn" data-diff="hard">困难</button>
+    </div>
+  </div>
+  <div class="setup-row">
+    <span class="setup-label">你的身份</span>
+    <div class="choice-group" id="human-group">
+      <button class="choice-btn selected" data-color="1">执黑（先手）</button>
+      <button class="choice-btn" data-color="2">执白（后手）</button>
+    </div>
+  </div>
+  <div class="setup-row" style="margin-bottom:0">
+    <button class="btn" id="start-btn" style="padding:12px 36px; font-size:16px;">开始对局</button>
+  </div>
+  <div class="diff-indicator" id="diff-info"></div>
+</div>
+
+<!-- 游戏区 -->
+<div id="game" style="display:none; flex-direction:column; align-items:center;">
+  <div class="scoreboard">
+    <div class="score-item">
+      <span class="score-disc black"></span>
+      <span class="score-num" id="score-b">2</span>
+    </div>
+    <div class="score-item">
+      <span class="score-disc white"></span>
+      <span class="score-num" id="score-w">2</span>
+    </div>
+  </div>
+  <div class="board" id="board"></div>
+  <div class="status" id="status"></div>
+  <div class="controls">
+    <button class="btn" id="undo-btn" onclick="doUndo()" disabled>悔棋</button>
+    <button class="btn danger" onclick="goSetup()">返回设置</button>
+  </div>
+  <div class="result" id="result"></div>
+</div>
+
+<script>
+'use strict';
+
+// ─── 常量 ───
+const EMPTY = 0, BLACK = 1, WHITE = 2;
+const DIRS = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+
+// 位置权重（用于评估）
+const W = [
+  [120,-20, 20, 10, 10, 20,-20,120],
+  [-20,-40,  0,  0,  0,  0,-40,-20],
+  [ 20,  0, -5, -5, -5, -5,  0, 20],
+  [ 10,  0, -5, -5, -5, -5,  0, 10],
+  [ 10,  0, -5, -5, -5, -5,  0, 10],
+  [ 20,  0, -5, -5, -5, -5,  0, 20],
+  [-20,-40,  0,  0,  0,  0,-40,-20],
+  [120,-20, 20, 10, 10, 20,-20,120]
+];
+
+// ─── 状态 ───
+let board, current, human = BLACK, gameOver, history, aiThinking;
+let difficulty = 'medium';
+let aiDepth = 4;
+
+// ─── 核心：获取 (r,c) 落子方向上可翻转的棋子 ───
+function getFlips(b, r, c, player) {
+  const opp = 3 - player;
+  const flips = [];
+  for (const [dr, dc] of DIRS) {
+    let nr = r + dr, nc = c + dc;
+    const line = [];
+    while (nr >= 0 && nr < 8 && nc >= 0 && nc < 8 && b[nr][nc] === opp) {
+      line.push([nr, nc]);
+      nr += dr; nc += dc;
+    }
+    if (line.length > 0 && nr >= 0 && nr < 8 && nc >= 0 && nc < 8 && b[nr][nc] === player) {
+      for (const p of line) flips.push(p);
+    }
+  }
+  return flips;
+}
+
+// ─── 合法落子 ───
+function getLegal(b, player) {
+  const moves = [];
+  for (let r = 0; r < 8; r++)
+    for (let c = 0; c < 8; c++)
+      if (b[r][c] === EMPTY && getFlips(b, r, c, player).length > 0)
+        moves.push([r, c]);
+  return moves;
+}
+
+// ─── 执行落子（in-place，返回可撤销信息） ───
+function place(b, r, c, player) {
+  const opp = 3 - player;
+  const flips = getFlips(b, r, c, player);
+  b[r][c] = player;
+  for (const [fr, fc] of flips) b[fr][fc] = player;
+  return { r, c, player, flips };
+}
+
+// ─── 撤销落子 ───
+function undoPlace(b, info) {
+  b[info.r][info.c] = EMPTY;
+  for (const [fr, fc] of info.flips) b[fr][fc] = 3 - info.player;
+}
+
+// ─── 评估 ───
+function evaluate(b) {
+  let score = 0;
+  let bCount = 0, wCount = 0;
+  for (let r = 0; r < 8; r++)
+    for (let c = 0; c < 8; c++) {
+      if (b[r][c] === BLACK) { score += W[r][c]; bCount++; }
+      else if (b[r][c] === WHITE) { score -= W[r][c]; wCount++; }
+    }
+  // 棋子数量差
+  const empties = 64 - bCount - wCount;
+  score += (bCount - wCount) * (empties > 0 ? 1 : 100);
+  return score;
+}
+
+// ─── AI 搜索（in-place alpha-beta） ───
+function search(b, depth, alpha, beta, player) {
+  if (depth === 0) return evaluate(b);
+  const moves = getLegal(b, player);
+  if (moves.length === 0) {
+    const oppMoves = getLegal(b, 3 - player);
+    if (oppMoves.length === 0) return evaluate(b); // 双方均无着法 → 终局
+    return -search(b, depth, alpha, beta, 3 - player) + 1; // 对方有着法，换人
+  }
+
+  // Move ordering: sort by weight descending (greedy)
+  moves.sort((a, bb) => W[bb[0]][bb[1]] - W[a[0]][a[1]]);
+
+  if (player === BLACK) {
+    let best = -Infinity;
+    for (const [r, c] of moves) {
+      const info = place(b, r, c, player);
+      const val = search(b, depth - 1, alpha, beta, 3 - player);
+      undoPlace(b, info);
+      if (val > best) best = val;
+      if (best > alpha) alpha = best;
+      if (alpha >= beta) break;
+    }
+    return best;
+  } else {
+    let best = Infinity;
+    for (const [r, c] of moves) {
+      const info = place(b, r, c, player);
+      const val = search(b, depth - 1, alpha, beta, 3 - player);
+      undoPlace(b, info);
+      if (val < best) best = val;
+      if (best < beta) beta = best;
+      if (alpha >= beta) break;
+    }
+    return best;
+  }
+}
+
+// ─── AI 选着 ───
+function aiChoose(player) {
+  const moves = getLegal(board, player);
+  if (moves.length === 1) return moves[0];
+
+  // 简单难度：30% 随机
+  if (difficulty === 'easy' && Math.random() < 0.3)
+    return moves[Math.floor(Math.random() * moves.length)];
+
+  // 按贪心权重排序
+  moves.sort((a, b2) => W[b2[0]][b2[1]] - W[a[0]][a[1]]);
+
+  let bestVal = -Infinity, bestMove = moves[0];
+  for (const [r, c] of moves) {
+    const info = place(board, r, c, player);
+    const val = search(board, aiDepth - 1, -Infinity, Infinity, 3 - player);
+    undoPlace(board, info);
+    if (val > bestVal) { bestVal = val; bestMove = [r, c]; }
+  }
+  return bestMove;
+}
+
+// ─── 渲染 ───
+function render() {
+  const boardEl = document.getElementById('board');
+  boardEl.innerHTML = '';
+
+  const legal = gameOver ? [] : getLegal(board, current);
+  const legalSet = new Set(legal.map(([r,c]) => r * 8 + c));
+
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      if (board[r][c] !== EMPTY) cell.classList.add('has-piece');
+
+      if (board[r][c] === BLACK || board[r][c] === WHITE) {
+        const piece = document.createElement('div');
+        piece.className = 'piece';
+        piece.innerHTML = `<div class="piece-inner black-face"></div><div class="piece-inner white-face"></div>`;
+        // 设置当前颜色状态
+        if (board[r][c] === BLACK) {
+          piece.classList.add('black');
+        } else {
+          piece.classList.add('white');
+        }
+        // 翻转目标颜色（CSS 控制）
+        if (board[r][c] === BLACK) {
+          piece.querySelector('.black-face').style.transform = 'rotateX(0deg)';
+          piece.querySelector('.black-face').style.zIndex = '2';
+          piece.querySelector('.white-face').style.transform = 'rotateX(180deg)';
+          piece.querySelector('.white-face').style.zIndex = '1';
+        } else {
+          piece.querySelector('.white-face').style.transform = 'rotateX(0deg)';
+          piece.querySelector('.white-face').style.zIndex = '2';
+          piece.querySelector('.black-face').style.transform = 'rotateX(180deg)';
+          piece.querySelector('.black-face').style.zIndex = '1';
+        }
+        cell.appendChild(piece);
+      }
+
+      if (legalSet.has(r * 8 + c)) {
+        const dot = document.createElement('div');
+        dot.className = 'hint-dot';
+        cell.appendChild(dot);
+      }
+
+      cell.dataset.r = r;
+      cell.dataset.c = c;
+      cell.addEventListener('click', () => onCell(r, c));
+      boardEl.appendChild(cell);
+    }
+  }
+
+  // 更新分数
+  let b = 0, w = 0;
+  for (let r = 0; r < 8; r++)
+    for (let c = 0; c < 8; c++) {
+      if (board[r][c] === BLACK) b++;
+      else if (board[r][c] === WHITE) w++;
+    }
+  document.getElementById('score-b').textContent = b;
+  document.getElementById('score-w').textContent = w;
+
+  // 状态
+  if (!gameOver) {
+    document.getElementById('status').textContent =
+      `轮到 ${current === human ? '你' : 'AI'}（${current === BLACK ? '⚫' : '⚪'}）`;
+  }
+
+  // 悔棋按钮
+  document.getElementById('undo-btn').disabled = history.length === 0 || aiThinking;
+}
+
+// ─── 带翻转动画的渲染 ───
+function renderWithFlip(flippedCells, placedRC, isAi) {
+  // 先渲染最终状态
+  render();
+
+  const boardEl = document.getElementById('board');
+  const cells = boardEl.children;
+  const flippedSet = new Set(flippedCells.map(([r,c]) => r * 8 + c));
+
+  for (const [r, c] of flippedCells) {
+    const cell = cells[r * 8 + c];
+    const piece = cell.querySelector('.piece');
+    if (!piece) continue;
+
+    const isBlack = board[r][c] === BLACK;
+    const bf = piece.querySelector('.black-face');
+    const wf = piece.querySelector('.white-face');
+
+    // 第一步：瞬间设置到"从"状态（无过渡）
+    bf.style.transition = 'none';
+    wf.style.transition = 'none';
+    if (isBlack) {
+      // 白→黑：先显示白色
+      bf.style.transform = 'rotateX(180deg)';
+      bf.style.zIndex = '1';
+      wf.style.transform = 'rotateX(0deg)';
+      wf.style.zIndex = '2';
+    } else {
+      // 黑→白：先显示黑色
+      bf.style.transform = 'rotateX(0deg)';
+      bf.style.zIndex = '2';
+      wf.style.transform = 'rotateX(180deg)';
+      wf.style.zIndex = '1';
+    }
+
+    // 第二步：下一帧触发过渡到"到"状态
+    requestAnimationFrame(() => {
+      bf.style.transition = '';
+      wf.style.transition = '';
+      if (isBlack) {
+        bf.style.transform = 'rotateX(0deg)';
+        bf.style.zIndex = '2';
+        wf.style.transform = 'rotateX(180deg)';
+        wf.style.zIndex = '1';
+      } else {
+        bf.style.transform = 'rotateX(180deg)';
+        bf.style.zIndex = '1';
+        wf.style.transform = 'rotateX(0deg)';
+        wf.style.zIndex = '2';
+      }
+    });
+  }
+
+  // 落子动画
+  const placedCell = cells[placedRC[0] * 8 + placedRC[1]];
+  const placedPiece = placedCell.querySelector('.piece');
+  if (placedPiece) placedPiece.classList.add('placing');
+  if (isAi) placedCell.classList.add('ai-move');
+}
+
+// ─── 点击落子 ───
+function onCell(r, c) {
+  if (gameOver || aiThinking || board[r][c] !== EMPTY) return;
+  if (current !== human) return;
+  const flips = getFlips(board, r, c, human);
+  if (flips.length === 0) return;
+
+  // 保存历史
+  history.push({
+    board: board.map(row => [...row]),
+    current, human, difficulty
+  });
+
+  const info = place(board, r, c, human);
+  current = 3 - human;
+  renderWithFlip(flips, [r, c], false);
+
+  checkEnd();
+  if (!gameOver) scheduleAi();
+}
+
+// ─── AI 落子 ───
+function aiMove() {
+  const moves = getLegal(board, current);
+  if (moves.length === 0) {
+    // AI 无着法，跳过回合，轮回人类
+    current = 3 - current;
+    document.getElementById('status').textContent = `AI 无法落子，轮到你（${current === BLACK ? '⚫' : '⚪'}）`;
+    document.getElementById('undo-btn').disabled = false;
+    render();
+    return;
+  }
+
+  // 简单难度随机
+  let chosen;
+  if (difficulty === 'easy' && moves.length > 1 && Math.random() < 0.3) {
+    chosen = moves[Math.floor(Math.random() * moves.length)];
+  } else {
+    // 排序帮助剪枝
+    const sorted = [...moves].sort((a, b2) => W[b2[0]][b2[1]] - W[a[0]][a[1]]);
+    let bestVal = -Infinity, bestMove = sorted[0];
+    for (const [r, c] of sorted) {
+      const info = place(board, r, c, current);
+      const val = search(board, aiDepth - 1, -Infinity, Infinity, 3 - current);
+      undoPlace(board, info);
+      if (val > bestVal) { bestVal = val; bestMove = [r, c]; }
+    }
+    chosen = bestMove;
+  }
+
+  const [r, c] = chosen;
+  const flips = getFlips(board, r, c, current);
+  const info = place(board, r, c, current);
+  current = 3 - current;
+  renderWithFlip(flips, [r, c], true);
+
+  checkEnd();
+  if (!gameOver) scheduleAi();
+}
+
+// ─── 调度 AI（让 UI 先渲染） ───
+function scheduleAi() {
+  if (current === human || gameOver) return;
+  document.getElementById('status').textContent = 'AI 思考中…';
+  document.getElementById('undo-btn').disabled = true;
+  aiThinking = true;
+  setTimeout(() => {
+    aiThinking = false;
+    aiMove();
+  }, 30);
+}
+
+// ─── 检查是否结束 ───
+function checkEnd() {
+  const bMoves = getLegal(board, BLACK);
+  const wMoves = getLegal(board, WHITE);
+  if (bMoves.length === 0 && wMoves.length === 0) {
+    gameOver = true;
+    let b = 0, w = 0;
+    for (let r = 0; r < 8; r++)
+      for (let c = 0; c < 8; c++) {
+        if (board[r][c] === BLACK) b++;
+        else if (board[r][c] === WHITE) w++;
+      }
+    document.getElementById('status').textContent = '';
+    document.getElementById('undo-btn').disabled = false;
+    const el = document.getElementById('result');
+    const humanScore = human === BLACK ? b : w;
+    const aiScore = human === BLACK ? w : b;
+    if (humanScore > aiScore) el.className = 'result win';
+    else if (humanScore < aiScore) el.className = 'result lose';
+    else el.className = 'result draw';
+    el.textContent = humanScore > aiScore ? `胜利！${humanScore} : ${aiScore}` : humanScore < aiScore ? `失败 ${humanScore} : ${aiScore}` : `平局 ${humanScore} : ${aiScore}`;
+  } else if (getLegal(board, current).length === 0) {
+    // 当前方无着法，跳过
+    const skipColor = current;
+    current = 3 - current;
+    document.getElementById('status').textContent = `跳过 ${skipColor === BLACK ? '⚫' : '⚪'}，轮到 ${current === human ? '你' : 'AI'}（${current === BLACK ? '⚫' : '⚪'}）`;
+    if (current !== human && !gameOver) {
+      aiThinking = true;
+      setTimeout(() => { aiThinking = false; aiMove(); }, 30);
+    } else {
+      render();
+    }
+  }
+}
+
+// ─── 悔棋 ───
+function doUndo() {
+  if (aiThinking || history.length === 0) return;
+  const prev = history.pop();
+  board = prev.board;
+  current = prev.current;
+  human = prev.human;
+  difficulty = prev.difficulty;
+  aiDepth = difficulty === 'easy' ? 2 : difficulty === 'hard' ? 5 : 4;
+  gameOver = false;
+  document.getElementById('result').className = 'result';
+  document.getElementById('result').textContent = '';
+  render();
+}
+
+// ─── 开局 ───
+function startGame() {
+  board = [
+    [EMPTY,EMPTY,EMPTY,EMPTY,EMPTY,EMPTY,EMPTY,EMPTY],
+    [EMPTY,EMPTY,EMPTY,EMPTY,EMPTY,EMPTY,EMPTY,EMPTY],
+    [EMPTY,EMPTY,EMPTY,EMPTY,EMPTY,EMPTY,EMPTY,EMPTY],
+    [EMPTY,EMPTY,EMPTY,BLACK,WHITE,EMPTY,EMPTY,EMPTY],
+    [EMPTY,EMPTY,EMPTY,WHITE,BLACK,EMPTY,EMPTY,EMPTY],
+    [EMPTY,EMPTY,EMPTY,EMPTY,EMPTY,EMPTY,EMPTY,EMPTY],
+    [EMPTY,EMPTY,EMPTY,EMPTY,EMPTY,EMPTY,EMPTY,EMPTY],
+    [EMPTY,EMPTY,EMPTY,EMPTY,EMPTY,EMPTY,EMPTY,EMPTY]
+  ];
+  current = BLACK;
+  gameOver = false;
+  history = [];
+  aiThinking = false;
+  aiDepth = difficulty === 'easy' ? 2 : difficulty === 'hard' ? 5 : 4;
+
+  document.getElementById('setup').style.display = 'none';
+  document.getElementById('game').style.display = 'flex';
+  document.getElementById('result').className = 'result';
+  document.getElementById('result').textContent = '';
+
+  render();
+  if (current !== human) scheduleAi();
+}
+
+// ─── 返回设置 ───
+function goSetup() {
+  gameOver = true;
+  aiThinking = false;
+  document.getElementById('game').style.display = 'none';
+  document.getElementById('setup').style.display = 'block';
+}
+
+// ─── 初始化交互 ───
+(function init() {
+  // 难度按钮
+  document.querySelectorAll('#diff-group .choice-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#diff-group .choice-btn').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      difficulty = btn.dataset.diff;
+      document.getElementById('diff-info').textContent =
+        difficulty === 'easy' ? 'AI 浅层搜索，偶尔失误' :
+        difficulty === 'medium' ? '标准搜索深度，均衡对局' :
+        '深度搜索 + 位置评估，难以取胜';
+    });
+  });
+  // 身份按钮
+  document.querySelectorAll('#human-group .choice-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#human-group .choice-btn').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      human = parseInt(btn.dataset.color);
+    });
+  });
+  // 开始
+  document.getElementById('start-btn').addEventListener('click', startGame);
+
+  // 默认显示
+  document.getElementById('game').style.display = 'none';
+  document.getElementById('diff-info').textContent = '标准搜索深度，均衡对局';
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>五子棋 Gomoku</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  background: #0f1923;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100vh;
+  padding: 20px;
+  color: #e0e0e0;
+}
+h1 { font-size: 28px; margin-bottom: 6px; letter-spacing: 2px; }
+.subtitle { font-size: 13px; opacity: 0.5; margin-bottom: 14px; }
+
+/* 棋盘 */
+.board-wrap {
+  background: #DEB887;
+  padding: 10px;
+  border-radius: 6px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+canvas { display: block; cursor: pointer; }
+
+/* 状态文字 */
+.status {
+  margin-top: 14px;
+  font-size: 16px;
+  height: 24px;
+  transition: opacity 0.3s;
+}
+
+/* 控制区 */
+.controls { display: flex; gap: 12px; margin-top: 12px; }
+.btn {
+  padding: 8px 20px;
+  border: none; border-radius: 4px;
+  background: #4a90d9; color: #fff;
+  font-size: 14px; cursor: pointer;
+  transition: background 0.2s;
+}
+.btn:hover { background: #357abd; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn.danger { background: #c0392b; }
+.btn.danger:hover { background: #a93226; }
+
+/* 开局面板 */
+.setup {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 12px;
+  padding: 28px 36px;
+  text-align: center;
+}
+.setup h2 { font-size: 20px; margin-bottom: 18px; font-weight: 600; }
+.setup-row { margin-bottom: 16px; }
+.setup-label { font-size: 13px; opacity: 0.6; margin-bottom: 8px; text-align: left; display: block; }
+.choice-group { display: flex; gap: 10px; justify-content: center; }
+.choice-btn {
+  padding: 10px 18px;
+  border: 2px solid #4a90d9;
+  background: transparent;
+  color: #e0e0e0;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s;
+}
+.choice-btn:hover { background: rgba(74,144,217,0.2); }
+.choice-btn.selected { background: #4a90d9; color: #fff; border-color: #4a90d9; }
+
+/* 结果 */
+.result {
+  margin-top: 16px;
+  padding: 14px 28px;
+  border-radius: 8px;
+  font-size: 18px;
+  font-weight: bold;
+  display: none;
+}
+.result.win { background: rgba(46, 204, 113, 0.15); color: #2ecc71; display: block; }
+.result.lose { background: rgba(231, 76, 60, 0.15); color: #e74c3c; display: block; }
+.result.draw { background: rgba(241, 196, 15, 0.15); color: #f1c40f; display: block; }
+
+/* 难度指示 */
+.diff-indicator {
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.5;
+}
+</style>
+</head>
+<body>
+
+<h1>五子棋</h1>
+<div class="subtitle">Gomoku — 五连制胜</div>
+
+<!-- 开局面板 -->
+<div id="setup" class="setup">
+  <h2>对局设置</h2>
+  <div class="setup-row">
+    <span class="setup-label">AI 难度</span>
+    <div class="choice-group" id="diff-group">
+      <button class="choice-btn" data-diff="easy">进攻型（易）</button>
+      <button class="choice-btn selected" data-diff="hard">防守型（难）</button>
+    </div>
+    <div class="diff-indicator" id="diff-info">AI 优先防守，难以取胜</div>
+  </div>
+  <div class="setup-row">
+    <span class="setup-label">你的身份</span>
+    <div class="choice-group" id="human-group">
+      <button class="choice-btn selected" data-side="black">执黑（先手）</button>
+      <button class="choice-btn" data-side="white">执白（后手）</button>
+    </div>
+  </div>
+  <div class="setup-row">
+    <span class="setup-label">禁手规则</span>
+    <div class="choice-group" id="forbid-group">
+      <button class="choice-btn selected" data-forbid="on">启用禁手</button>
+      <button class="choice-btn" data-forbid="off">非禁手</button>
+    </div>
+  </div>
+  <div class="setup-row" style="margin-bottom:0">
+    <button class="btn" id="start-btn" style="padding:12px 36px; font-size:16px;">开始对局</button>
+  </div>
+</div>
+
+<!-- 游戏区 -->
+<div id="game" style="display:none; flex-direction:column; align-items:center;">
+  <div class="board-wrap">
+    <canvas id="board" width="600" height="600"></canvas>
+  </div>
+  <div class="status" id="status"></div>
+  <div class="controls">
+    <button class="btn" id="undo-btn" onclick="doUndo()" disabled>悔棋</button>
+    <button class="btn danger" onclick="goSetup()">返回设置</button>
+  </div>
+  <div class="result" id="result"></div>
+</div>
+
+<script>
+(function() {
+  const SIZE = 15;
+  const CELL = 40;
+  const PAD = 20;
+  const canvas = document.getElementById('board');
+  const ctx = canvas.getContext('2d');
+  const statusEl = document.getElementById('status');
+  const resultEl = document.getElementById('result');
+
+  let board = [];
+  let gameOver = false;
+  let thinking = false;
+  let defendWeight = 0.9; // 防守型0.9，进攻型0.5
+  let forbiddenMode = true; // 是否启用禁手规则
+  let playerIsFirst = true; // 玩家是否执黑（先手）
+  let aiLastMove = null; // AI最后一手的位置
+  let history = []; // 历史栈（玩家每次落子前的快照）
+  const undoBtn = document.getElementById('undo-btn');
+
+  // ─── 渲染 ───
+  function draw() {
+    ctx.clearRect(0, 0, 600, 600);
+    ctx.strokeStyle = '#5d4037';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < SIZE; i++) {
+      ctx.beginPath();
+      ctx.moveTo(PAD + i * CELL, PAD);
+      ctx.lineTo(PAD + i * CELL, PAD + 14 * CELL);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(PAD, PAD + i * CELL);
+      ctx.lineTo(PAD + 14 * CELL, PAD + i * CELL);
+      ctx.stroke();
+    }
+    // 棋子
+    for (let r = 0; r < SIZE; r++) {
+      for (let c = 0; c < SIZE; c++) {
+        if (board[r][c] !== 0) drawStone(r, c, board[r][c]);
+      }
+    }
+    // AI最后一手高亮
+    if (aiLastMove) drawAIHighlight(aiLastMove.r, aiLastMove.c);
+  }
+
+  function drawStone(r, c, val) {
+    const x = PAD + c * CELL;
+    const y = PAD + r * CELL;
+    ctx.beginPath();
+    ctx.arc(x, y, 16, 0, Math.PI * 2);
+    ctx.fillStyle = val === 1 ? '#111' : '#f5f5f5';
+    ctx.fill();
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  function drawAIHighlight(r, c) {
+    const x = PAD + c * CELL;
+    const y = PAD + r * CELL;
+    ctx.beginPath();
+    ctx.arc(x, y, 18, 0, Math.PI * 2);
+    ctx.strokeStyle = '#e74c3c';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+  }
+
+  function place(r, c, val) {
+    board[r][c] = val;
+    draw();
+  }
+
+  // ─── 禁手判定（针对先手方） ───
+  function isForbidden(r, c, val) {
+    board[r][c] = val;
+    let result = getForbiddenType(r, c, val);
+    board[r][c] = 0;
+    return result;
+  }
+
+  function getForbiddenType(r, c, val) {
+    const dirs = [[0,1],[1,0],[1,1],[1,-1]];
+    let longCount = 0;    // 长禁手（6+）
+    let fourCount = 0;    // 冲四/活四数量
+    let threeCount = 0;   // 活三数量
+
+    for (let d = 0; d < 4; d++) {
+      const dr = dirs[d][0], dc = dirs[d][1];
+      let count = 1, open = 0;
+
+      let nr = r + dr, nc = c + dc;
+      while (nr >= 0 && nr < SIZE && nc >= 0 && nc < SIZE && board[nr][nc] === val) {
+        count++;
+        nr += dr;
+        nc += dc;
+      }
+      if (nr >= 0 && nr < SIZE && nc >= 0 && nc < SIZE && board[nr][nc] === 0) open++;
+
+      nr = r - dr;
+      nc = c - dc;
+      while (nr >= 0 && nr < SIZE && nc >= 0 && nc < SIZE && board[nr][nc] === val) {
+        count++;
+        nr -= dr;
+        nc -= dc;
+      }
+      if (nr >= 0 && nr < SIZE && nc >= 0 && nc < SIZE && board[nr][nc] === 0) open++;
+
+      if (count >= 6) longCount++;
+      else if (count === 4 && open >= 1) fourCount++;
+      else if (count === 3 && open === 2) threeCount++;
+    }
+
+    // 优先级：长 > 四四 > 三三
+    if (longCount > 0) return '长';
+    if (fourCount >= 2) return '四四';
+    if (threeCount >= 2) return '三三';
+    return null;
+  }
+
+  // ─── 点击落子 ───
+  canvas.addEventListener('click', function(e) {
+    if (gameOver || thinking) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const c = Math.round((mx - PAD) / CELL);
+    const r = Math.round((my - PAD) / CELL);
+    if (r < 0 || r >= SIZE || c < 0 || c >= SIZE) return;
+    if (board[r][c] !== 0) return;
+
+    // 禁手检测（仅先手方）
+    if (forbiddenMode && playerIsFirst) {
+      const type = isForbidden(r, c, 1);
+      if (type !== null) {
+        statusEl.textContent = '禁手！' + type + '禁手，请换位置';
+        return;
+      }
+    }
+
+    // 保存快照：撤销玩家这一手（连同 AI 的响应）
+    history.push({ board: board.map(row => [...row]), aiLastMove });
+    place(r, c, 1);
+    if (checkWin(r, c, 1)) { endGame(1); return; }
+    if (isBoardFull()) { endGame(0); return; }
+
+    // 触发 AI
+    thinking = true;
+    statusEl.textContent = 'AI思考中…';
+    setTimeout(doAIMove, 400);
+  });
+
+  function doAIMove() {
+    if (gameOver) { thinking = false; return; }
+    const move = findBestMove();
+    place(move.r, move.c, 2);
+    aiLastMove = { r: move.r, c: move.c };
+    draw();
+    thinking = false;
+    if (checkWin(move.r, move.c, 2)) { endGame(2); return; }
+    if (isBoardFull()) { endGame(0); return; }
+    statusEl.textContent = '你的回合（' + (playerIsFirst ? '黑棋）' : '白棋）');
+    updateUndoBtn();
+  }
+
+  // ─── 悔棋 ───
+  function doUndo() {
+    if (thinking || history.length === 0) return;
+    const prev = history.pop();
+    board = prev.board;
+    aiLastMove = prev.aiLastMove;
+    draw();
+    statusEl.textContent = '你的回合（' + (playerIsFirst ? '黑棋）' : '白棋）');
+    updateUndoBtn();
+  }
+  window.doUndo = doUndo;
+
+  function updateUndoBtn() {
+    undoBtn.disabled = thinking || history.length === 0;
+  }
+
+  // ─── AI 逻辑 ───
+  function findBestMove() {
+    // 进攻型 AI 先检查：玩家下一手是否即将五连，若是则优先封堵
+    if (defendWeight === 0.5) {
+      const threat = findPlayerThreat();
+      if (threat) return threat;
+    }
+
+    let bestScore = -1;
+    let bestR = 0, bestC = 0;
+    for (let r = 0; r < SIZE; r++) {
+      for (let c = 0; c < SIZE; c++) {
+        if (board[r][c] !== 0) continue;
+        // AI先手时跳过禁手位置
+        if (forbiddenMode && !playerIsFirst && isForbidden(r, c, 2) !== null) continue;
+        const attack = evaluatePos(r, c, 2);
+        const defend = evaluatePos(r, c, 1);
+        const score = attack + defend * defendWeight;
+        if (score > bestScore) {
+          bestScore = score;
+          bestR = r;
+          bestC = c;
+        }
+      }
+    }
+    return { r: bestR, c: bestC };
+  }
+
+  // 进攻型 AI：找玩家即将五连的威胁点，优先封堵
+  function findPlayerThreat() {
+    let best = null;
+    let bestDefend = 0;
+    for (let r = 0; r < SIZE; r++) {
+      for (let c = 0; c < SIZE; c++) {
+        if (board[r][c] !== 0) continue;
+        // 玩家放这里能五连（count>=5 返回 100000）
+        const defend = evaluatePos(r, c, 1);
+        if (defend >= 100000 && defend > bestDefend) {
+          bestDefend = defend;
+          best = { r, c };
+        }
+      }
+    }
+    return best;
+  }
+
+  function evaluatePos(r, c, val) {
+    let total = 0;
+    const dirs = [[0,1],[1,0],[1,1],[1,-1]];
+    for (let d = 0; d < 4; d++) {
+      const dr = dirs[d][0], dc = dirs[d][1];
+      let count = 1, open = 0;
+
+      let nr = r + dr, nc = c + dc;
+      while (nr >= 0 && nr < SIZE && nc >= 0 && nc < SIZE && board[nr][nc] === val) {
+        count++;
+        nr += dr;
+        nc += dc;
+      }
+      if (nr >= 0 && nr < SIZE && nc >= 0 && nc < SIZE && board[nr][nc] === 0) open++;
+
+      nr = r - dr;
+      nc = c - dc;
+      while (nr >= 0 && nr < SIZE && nc >= 0 && nc < SIZE && board[nr][nc] === val) {
+        count++;
+        nr -= dr;
+        nc -= dc;
+      }
+      if (nr >= 0 && nr < SIZE && nc >= 0 && nc < SIZE && board[nr][nc] === 0) open++;
+
+      if (count >= 5) total += 100000;
+      else if (count === 4 && open === 2) total += 50000;
+      else if (count === 4 && open === 1) total += 8000;
+      else if (count === 3 && open === 2) total += 5000;
+      else if (count === 3 && open === 1) total += 800;
+      else if (count === 2 && open === 2) total += 400;
+      else if (count === 2 && open === 1) total += 50;
+    }
+    return total;
+  }
+
+  // ─── 胜负判定 ───
+  function checkWin(r, c, val) {
+    const dirs = [[0,1],[1,0],[1,1],[1,-1]];
+    for (let d = 0; d < 4; d++) {
+      const dr = dirs[d][0], dc = dirs[d][1];
+      let count = 1;
+      let nr = r + dr, nc = c + dc;
+      while (nr >= 0 && nr < SIZE && nc >= 0 && nc < SIZE && board[nr][nc] === val) {
+        count++;
+        nr += dr;
+        nc += dc;
+      }
+      nr = r - dr;
+      nc = c - dc;
+      while (nr >= 0 && nr < SIZE && nc >= 0 && nc < SIZE && board[nr][nc] === val) {
+        count++;
+        nr -= dr;
+        nc -= dc;
+      }
+      if (count >= 5) return true;
+    }
+    return false;
+  }
+
+  function isBoardFull() {
+    for (let r = 0; r < SIZE; r++) {
+      for (let c = 0; c < SIZE; c++) {
+        if (board[r][c] === 0) return false;
+      }
+    }
+    return true;
+  }
+
+  // ─── 终局 ───
+  function endGame(winner) {
+    gameOver = true;
+    thinking = false;
+    if (winner === 1) {
+      statusEl.textContent = '你赢了！';
+      resultEl.className = 'result win';
+      resultEl.textContent = '胜利！';
+    } else if (winner === 2) {
+      statusEl.textContent = '你输了！';
+      resultEl.className = 'result lose';
+      resultEl.textContent = '失败';
+    } else {
+      statusEl.textContent = '平局！';
+      resultEl.className = 'result draw';
+      resultEl.textContent = '平局';
+    }
+  }
+
+  // ─── 开局 ───
+  function startGame() {
+    board = [];
+    for (let i = 0; i < SIZE; i++) board.push(new Array(SIZE).fill(0));
+    gameOver = false;
+    thinking = false;
+    aiLastMove = null;
+    history = [];
+    resultEl.className = 'result';
+    resultEl.textContent = '';
+
+    document.getElementById('setup').style.display = 'none';
+    document.getElementById('game').style.display = 'flex';
+
+    draw();
+    if (!playerIsFirst) {
+      // AI 执黑先手：中心落子
+      thinking = true;
+      statusEl.textContent = 'AI 执黑，先行落子…';
+      place(7, 7, 2);
+      aiLastMove = { r: 7, c: 7 };
+      draw();
+      thinking = false;
+      statusEl.textContent = '你的回合（白棋）';
+    } else {
+      statusEl.textContent = '你的回合（黑棋）';
+    }
+    updateUndoBtn();
+  }
+
+  // ─── 返回设置 ───
+  function goSetup() {
+    gameOver = true;
+    thinking = false;
+    document.getElementById('game').style.display = 'none';
+    document.getElementById('setup').style.display = 'block';
+  }
+  window.goSetup = goSetup;
+
+  // ─── 初始化交互 ───
+  (function init() {
+    // 难度按钮
+    document.querySelectorAll('#diff-group .choice-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#diff-group .choice-btn').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        defendWeight = btn.dataset.diff === 'easy' ? 0.5 : 0.9;
+        document.getElementById('diff-info').textContent =
+          btn.dataset.diff === 'easy' ? 'AI 优先进攻，易于取胜' : 'AI 优先防守，难以取胜';
+      });
+    });
+    // 身份按钮
+    document.querySelectorAll('#human-group .choice-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#human-group .choice-btn').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        playerIsFirst = btn.dataset.side === 'black';
+      });
+    });
+    // 禁手按钮
+    document.querySelectorAll('#forbid-group .choice-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#forbid-group .choice-btn').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        forbiddenMode = btn.dataset.forbid === 'on';
+      });
+    });
+    // 开始
+    document.getElementById('start-btn').addEventListener('click', startGame);
+  })();
+})();
+</script>
+</body>
+</html>
