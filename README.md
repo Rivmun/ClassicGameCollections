@@ -1,9 +1,1 @@
-## Sum10Game
-
-用本地AI模型复刻的 Star Savior 星之救援者 M 教授活动的数字坐牢小游戏。
-
-玩法：在 120 秒内拖动框选网格内的数字，合计为 10 将其消除，每消除一个数字得 100 分。
-
-上方三个按钮功能为：随机消除 10 个数字（不得分）；重新随机剩余数字的位置；剩余时间 +10 秒。
-
-本关考验你的数学直觉.jpg
+AI generated classic minigame collections, for waste your time.
