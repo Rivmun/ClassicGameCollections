@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>贪吃蛇 Snake</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  background: #0f1923;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100vh;
+  padding: 20px;
+  color: #e0e0e0;
+}
+h1 { font-size: 28px; margin-bottom: 6px; letter-spacing: 2px; }
+.subtitle { font-size: 13px; opacity: .5; margin-bottom: 14px; }
+
+.board-wrap {
+  background: #DEB887;
+  padding: 10px;
+  border-radius: 6px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.5);
+}
+canvas { display: block;  } /* 随窗口大小自适应缩放 */
+
+.status {
+  margin-top: 14px;
+  font-size: 16px;
+  height: 24px;
+  transition: opacity .3s;
+}
+.status.dead { color: #ff7b7b; font-weight: 700; }
+
+.hud {
+  display: flex; gap: 18px; margin-top: 12px;
+  background: #16202b; padding: 10px 16px; border-radius: 8px;
+  font-size: 14px;
+}
+.hud .item b { color: #9fe8a4; margin-right: 6px; }
+.Controls { display: flex; gap: 12px; margin-top: 12px; }
+button {
+  background: #3d4a5c; color: #e0e0e0; border: none; border-radius: 6px;
+  padding: 8px 18px; font-size: 14px; cursor: pointer; transition: all .2s;
+}
+button:hover { background: #4b5a70; }
+
+.keys { margin-top: 10px; font-size: 13px; opacity: .6; }
+kbd {
+  background: #1f2a36; border-radius: 4px; padding: 2px 6px; margin-right: 4px;
+  font-family: 'Segoe UI', system-ui, sans-serif; font-size: 12px; color: #cdd8e5;
+}
+</style>
+</head>
+<body>
+
+<h1>贪吃蛇</h1>
+<div class="subtitle">经典贪吃蛇</div>
+
+<div class="board-wrap"><canvas id="cv" width="480" height="480"></canvas></div>
+
+<div class="status" id="status">按方向键开始前进…（蛇已自动出发）</div>
+
+<div class="hud">
+  <div class="item"><b>分数</b><span id="score">5</span></div>
+  <div class="item" id="turboState"></div>
+</div>
+
+<div class="Controls"><button id="restart">重新开始</button></div>
+
+<div class="keys">
+  <kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> / <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>
+</div>
+
+<script>
+'use strict';
+
+/* ============================== 基础常量 ============================== */
+const ROWS = 20, COLS = 20;          // grid
+let cellPx = 1;                     // pixels per cell — computed from browser window (scales both ways)
+function computeCellPx() {           // board always fits the viewport: side margins + fixed vertical elements accounted for
+  const availW = Math.floor(window.innerWidth * .94);
+  const availH = Math.floor(window.innerHeight - 302);
+  cellPx = Math.max(1, Math.floor(Math.min(availW / COLS, availH / ROWS)));
+}
+
+const START_LEN = 5;                // 初始长度
+const BASE_V = 1;                  // cells/sec — 起始默认速度（间隔恰好 1秒）
+
+/* ====== 规则模型：按规格实现，不做任何与规格冲突的改动 ====== */
+// (1) 自动前进默认间隔 1秒；速度随身体长度线性加快。
+const SPEED_STEP = 0.1;             // cells/sec per unit of length（线性的增长系数）
+function currentSpeed() {           // 当前"默认"速度（格/秒），仅由长度决定
+  return BASE_V + SPEED_STEP * Math.max(0, snake.length - START_LEN);
+}
+
+// (2)(3) 方向键 = 立即移动 + 重置计时；反向输入忽略 —— 在输入处理中实现。
+
+// (4) 长按 ≥0.2s → 固定 8倍速（0.125秒/格），不随长度变化。
+const HOLD_MS = 200;                // 触发长按的按住时长
+function turboAllowed() {           // 仅当默认速度未超过 8倍速时允许；一旦超过，永不响应长按
+  return currentSpeed() <= BASE_V * 8;   // 即 interval >= 1/(8·BASE_V) = 0.125s
+}
+
+/* ============================== 状态 ============================== */
+let snake = [];                     // [{x,y}, ...] 头在首位
+let dir = { x: 1, y: 0 };            // 当前前进方向（auto-step 使用）
+let food = null;                   // 食物位置
+let score = START_LEN;
+let over = false;
+
+// 计时器状态机：normal = 按长度线性变速；turbo = 固定间隔，仅由长按触发、不随长度变化
+const TURBO_INTERVAL_MS = Math.round(1000 / (BASE_V * 8)); // 0.125s —— 固定 8倍速
+let mode = 'normal';               // 'normal' | 'turbo'（turbo 仅在按键被按住期间存在）
+let nextAutoAt = Infinity;         // normal：下一次自动前进的时刻
+let turboNextAt = Infinity;        // turbo：下一步的固定时刻
+
+// 记录按住的键，用于长按检测（e.repeat 自动重复不计数）
+const presses = new Map();          // key -> { dir, start }
+
+/* ============================== DOM / 渲染 ============================== */
+function sizeCanvas() {
+  computeCellPx();
+  const px = ROWS * cellPx;
+  if (cv.width !== px || cv.height !== px) {           // only resize when the board pixel size actually changes
+    cv.width = px; cv.height = px;
+  }
+}
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+sizeCanvas();
+window.addEventListener('resize', sizeCanvas);
+const statusEl = document.getElementById('status');
+const scoreEl = document.getElementById('score');
+const turboStateEl = document.getElementById('turboState');
+
+function draw() {
+  // 棋盘背景
+  ctx.fillStyle = '#16202b';
+  ctx.fillRect(0, 0, cv.width, cv.height);
+  // 网格线
+  ctx.strokeStyle = 'rgba(43,58,74,.4)';
+  for (let i = 1; i < ROWS; i++) {
+    const gx = Math.round(i * cellPx + .5), gy = Math.round(i * cellPx + .5);
+    ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, cv.height); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(cv.width, gy); ctx.stroke();
+  }
+
+  // 食物（橙红圆）
+  if (food) {
+    ctx.fillStyle = '#ff8f4d';
+    ctx.beginPath();
+    ctx.arc((food.x + .5) * cellPx, (food.y + .5) * cellPx, cellPx * .30, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 蛇（圆角方块，头亮一些）
+  for (let i = snake.length - 1; i >= 0; i--) {
+    const s = snake[i];
+    ctx.fillStyle = i === 0 ? '#9fe8a4' : '#3fae5b';
+    roundRect((s.x + .12) * cellPx, (s.y + .12) * cellPx,
+              cellPx * .76, cellPx * .76, Math.max(2, Math.round(cellPx * .20)));
+  }
+
+  scoreEl.textContent = score;   // 分数照常显示
+  if (!over && mode === 'turbo') {
+    turboStateEl.className = '';                       // 仅提示当前处于加速状态，不解释规则
+    turboStateEl.textContent = '⚡ 8倍速';
+  } else {
+    turboStateEl.textContent = '';
+  }
+
+  if (over) {
+    ctx.fillStyle = 'rgba(15,25,35,.72)';
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    // Game-over overlay: font size / position scale with the board
+    const fBig = Math.round(cellPx * 1.8), fSm = Math.round(cellPx * .84);
+    ctx.fillStyle = '#ff7b7b';
+    ctx.font = fBig + 'px "Segoe UI", system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('游戏结束', cv.width / 2, cv.height / 2 - cellPx * .4);
+    ctx.fillStyle = '#e0e0e0';
+    ctx.font = fSm + 'px "Segoe UI", system-ui, sans-serif';
+    ctx.fillText('得分：' + score, cv.width / 2, cv.height / 2 + cellPx * 1.4);
+    ctx.textAlign = 'left';
+  }
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+  ctx.fill();
+}
+
+/* ============================== 游戏逻辑（严格按规格） ============================== */
+
+// 移动尝试：撞墙/自身 → 结束；吃到食物则增长。返回 true=成功，false=死亡。
+function tryStep(dx, dy) {
+  const hx = snake[0].x + dx, hy = snake[0].y + dy;
+  if (hx < 0 || hx >= COLS || hy < 0 || hy >= ROWS) return die();
+
+  // 自身碰撞判定：不吃时尾部即将腾出，仅检查保留部分；吃时全部保留。
+  const willEat = food && hx === food.x && hy === food.y;
+  const checkLen = snake.length - (willEat ? 0 : 1);
+  for (let i = 0; i < checkLen; i++) {
+    if (snake[i].x === hx && snake[i].y === hy) return die();
+  }
+
+  // 移动成功：头部前进，按规格保持经典生长规则
+  snake.unshift({ x: hx, y: hy });
+  dir = { x: dx, y: dy };
+  if (willEat) { score++; spawnFood(); } else { snake.pop(); }
+  return true;
+}
+
+function die() {
+  over = true;
+  statusEl.textContent = '💀 游戏结束 — 得分：' + score;
+  statusEl.className = 'status dead';
+  draw();
+  return false;
+}
+
+// (1) 自动前进计时：interval 由当前长度决定 —— 线性加快，绝不人为放慢或封顶。
+function scheduleNormal(nowMs) {
+  nextAutoAt = nowMs + Math.round(1000 / currentSpeed()); // interval = 1/速度（秒→毫秒）
+}
+
+// (4) 长按触发点：仅当 turboAllowed()；一旦进入，固定间隔、不随长度变化。
+function enterTurbo(nowMs) {
+  mode = 'turbo';
+  turboNextAt = nowMs + TURBO_INTERVAL_MS; // 固定 0.125s —— 与长度无关
+}
+
+/* ------------------------------- 输入处理 ------------------------------- */
+
+const DIRS = {
+  ArrowUp:    { x: 0, y: -1 }, KeyW: { x: 0, y: -1 },
+  ArrowDown:  { x: 0, y: +1 }, KeyS: { x: 0, y: +1 },
+  ArrowLeft:  { x: -1, y: 0 }, KeyA: { x: -1, y: 0 },
+  ArrowRight: { x: +1, y: 0 }, KeyD: { x: +1, y: 0 }
+};
+
+function onKeydown(e) {
+  if (over) return;                       // 结束后不响应输入
+  const d = DIRS[e.key];
+  if (!d) return;
+  e.preventDefault();                     // 防止页面滚动
+  if (e.repeat) return;                  // OS 自动重复：长按由 keyup/keydown 时间差判定，这里忽略
+
+  // —— (3) 与当前前进方向相反的输入：完全忽略（不移动、不记录、不计时）——
+  if (d.x * dir.x + d.y * dir.y === -1) return;
+
+  // —— (2) 立即向对应方向移动，并重置自动前进计时 —— （无论 normal/turbo）
+  const nowMs = performance.now();
+  tryStep(d.x, d.y);                       // 若死亡则 over=true，后续调度自然停止
+
+  if (mode === 'normal') {
+    scheduleNormal(nowMs);                 // 重置：下一次自动前进按当前长度线性变速
+  } else {
+    turboNextAt = nowMs + TURBO_INTERVAL_MS; // turbo 下也重置固定计时（速度维持不变）
+  }
+
+  // —— (4) 记录按住时间，用于 ≥0.2s 长按检测 ——
+  presses.set(e.key, { dir: d, start: nowMs });
+}
+
+function onKeyup(e) {
+  if (!presses.has(e.key)) return;
+  presses.delete(e.key);
+  // 松开 → 结束 turbo（若曾进入），恢复按长度线性变速的正常计时并重置。
+  if (mode === 'turbo') {
+    mode = 'normal';
+    scheduleNormal(performance.now());
+  }
+}
+
+window.addEventListener('keydown', onKeydown);
+window.addEventListener('keyup', onKeyup);
+
+/* ------------------------------- 主循环（每帧） ------------------------------- */
+
+function tick(nowMs) {
+  requestAnimationFrame(tick);
+  if (over) return;
+
+  // —— (4) 长按检测：任一方向键按住 ≥0.2s，且默认速度未超过8倍速 → 进入固定8倍速。
+  // 注意：必须幂等——一旦处于turbo模式不再重复调用enterTurbo（否则每帧重置计时器导致永不移动）。
+  if (mode !== 'turbo') {
+    for (const p of presses.values()) {
+      const heldMs = nowMs - p.start;
+      if (heldMs >= HOLD_MS && turboAllowed()) {   // 一旦超过8倍速：此分支永不成立（不响应长按）
+        enterTurbo(nowMs);
+        break;
+      }
+    }
+  }
+
+  // —— (1) 自动前进：normal=按长度线性；turbo=固定0.125s，不随长度变化。——
+  if (mode === 'normal') {
+    if (nowMs >= nextAutoAt) {
+      const ok = tryStep(dir.x, dir.y);   // 沿当前方向自动前进（无用户输入）
+      if (ok) scheduleNormal(nowMs);      // 按增长后的长度线性加快下一次间隔
+    }
+  } else {
+    // turbo：固定速前进；仅在按键仍被按住期间存在，松开即恢复。
+    if (presses.size === 0 || nowMs < turboNextAt) return; // 无门控则绝不移动
+    const ok = tryStep(dir.x, dir.y);
+    if (ok) turboNextAt = nowMs + TURBO_INTERVAL_MS;         // 固定间隔，与长度无关
+  }
+
+  draw();
+}
+
+/* ------------------------------- 初始化 / 重启 ------------------------------- */
+
+function spawnFood() {
+  for (;;) {
+    const x = Math.floor(Math.random() * COLS);
+    const y = Math.floor(Math.random() * ROWS);
+    let free = true;
+    for (const s of snake) if (s.x === x && s.y === y) { free = false; break; }
+    if (free) { food = { x, y }; return; }
+  }
+}
+
+function startGame() {
+  over = false;
+  mode = 'normal';
+  nextAutoAt = Infinity;
+  turboNextAt = Infinity;
+  presses.clear();
+
+  // 初始：长度5，居中横排，默认向右前进 —— 自动间隔从1秒开始（按规格）
+  const midY = Math.floor(ROWS / 2);
+  snake = [];
+  for (let i = START_LEN - 1; i >= 0; i--) snake.push({ x: Math.floor(COLS / 2) + i, y: midY });
+  dir = { x: 1, y: 0 };
+
+  spawnFood();
+  score = START_LEN;
+  nextAutoAt = performance.now() + Math.round(1000 / BASE_V); // 默认间隔恰好 1秒
+
+  statusEl.textContent = '按方向键开始前进…（蛇已自动出发）';
+  statusEl.className = 'status';
+  draw();
+}
+
+document.getElementById('restart').addEventListener('click', () => { startGame(); });
+
+startGame();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

@@ -117,7 +117,7 @@ body {
         <div class="name">五子棋</div>
         <div class="desc">五连制胜 · 进攻/防守难度 · 禁手规则</div>
       </div>
-      <button class="play" onclick="event.stopPropagation()">开始</button>
+      <button class="play" >开始</button>
     </div>
 
     <div class="game-item" data-game="othello">
@@ -126,7 +126,7 @@ body {
         <div class="name">黑白棋</div>
         <div class="desc">经典翻转对战 · 三档 AI 难度</div>
       </div>
-      <button class="play" onclick="event.stopPropagation()">开始</button>
+      <button class="play" >开始</button>
     </div>
 
     <div class="game-item" data-game="sum10">
@@ -135,7 +135,7 @@ body {
         <div class="name">数字消除</div>
         <div class="desc">选择矩形区域 · 数字之和恰好为 10</div>
       </div>
-      <button class="play" onclick="event.stopPropagation()">开始</button>
+      <button class="play" >开始</button>
     </div>
 
     <div class="game-item" data-game="mines">
@@ -144,7 +144,16 @@ body {
         <div class="name">扫雷</div>
         <div class="desc">经典扫雷 · 初级 / 中级 / 高级</div>
       </div>
-      <button class="play" onclick="event.stopPropagation()">开始</button>
+      <button class="play" >开始</button>
+    </div>
+
+    <div class="game-item" data-game="snake">
+      <span class="icon">🐍</span>
+      <div class="info">
+        <div class="name">贪吃蛇</div>
+        <div class="desc">经典贪吃蛇</div>
+      </div>
+      <button class="play" >开始</button>
     </div>
   </div>
 </div>
@@ -160,7 +169,8 @@ const GAMES = {
   gomoku:  'game/gomoku.html',
   othello: 'game/othello.html',
   sum10:   'game/Sum10.html',
-  mines:   'game/mine-sweeper.html'
+  mines:   'game/mine-sweeper.html',
+  snake:   'game/snake.html'
 };
 
 const frame     = document.getElementById('game-frame');
