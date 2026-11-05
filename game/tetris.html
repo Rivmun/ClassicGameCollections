@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>俄罗斯方块 (Tetris)</title>
+  <style>
+    :root{
+      --bg:#1a1f2b; --panel:#2a313a; --line:#2b3a5c;
+      --num:#e6ecf3; --accent:#f4c53a; --hint:#7d89a6;
+    }
+    *{box-sizing:border-box}
+    html, body {
+      width: 100%; height: 100%;
+      background: var(--bg);
+      font-family: "微软雅黑", "SimHei", -apple-system, sans-serif;
+      color: var(--num);
+      display:flex; flex-direction:column; align-items:center; gap:14px;
+    }
+    body{ padding:20px; overflow:hidden; margin:0; }
+    h1{ font-size:24px; font-weight:600; letter-spacing:1px; margin:0; }
+    .controls{
+      display:flex; justify-content:center; align-items:center; gap:18px;
+      background:var(--panel); padding:9px 14px; border-radius:10px;
+    } /* single centered row - never wraps, no overflow in small windows */
+    .hint-box{ font-size:13px; color:var(--hint); }
+    /* 开局面板 (参考 gomoku/othello 设置界面) */
+    .setup{
+      background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.1);
+      border-radius:12px; padding:28px 36px; text-align:center;
+    }
+    .setup h2{ font-size:20px; margin-bottom:18px; font-weight:600; }
+    .setup-row{ margin-bottom:16px; }
+    .setup-label{ font-size:13px; opacity:0.6; margin-bottom:8px; text-align:left; display:block; color:var(--hint); }
+    .choice-group{ display:flex; gap:10px; justify-content:center; }
+    .choice-btn{
+      padding:10px 18px; border:2px solid var(--accent);
+      background:transparent; color:var(--num); border-radius:6px;
+      cursor:pointer; font-size:14px; transition:all 0.2s;
+    }
+    .choice-btn:hover{ background:rgba(244,197,58,0.2); }
+    .choice-btn.selected{ background:#f4c53a; color:#1b1207; border-color:#8a6d0e; font-weight:600; } /* gold + near-black text = high contrast, clearly readable */
+    .setup-note{ font-size:13px; color:var(--hint); line-height:1.6; margin-bottom:16px; text-align:left; }
+    .btn-start{
+      padding:12px 36px; font-size:16px; border:none; border-radius:8px;
+      background:#3a7d5a; color:#fff; cursor:pointer; transition:background 0.2s;
+    }
+    .btn-start:hover{ background:#4a9d6e; }
+    .btn-back{
+      padding:8px 16px; font-size:13px; border:none; border-radius:6px;
+      background:var(--panel); color:var(--hint); cursor:pointer; transition:background 0.2s;
+    }
+    .btn-back:hover{ background:#3a4552; }
+    .score-box{ font-size:15px; font-weight:bold; }
+    #stage{
+      position:relative;
+      background:#0f1220; border:2px solid var(--line);
+      box-shadow:0 0 30px rgba(0,0,0,0.6); border-radius:6px;
+      transform-origin:50% 0%;
+    }
+    canvas{ width:360px; height:720px; }
+    #overlay{
+      position:absolute; top:300px; left:36px; width:288px;
+      height:48px; display:flex; align-items:center; justify-content:center;
+      line-height:48px; text-align:center; color:var(--accent); font-size:20px; font-weight:bold;
+      background:rgba(15,18,32,0.78); border-radius:8px;
+    }
+
+    /* Settlement screen — hidden by default; shown only in endGame.
+       纵向列布局 + 左右居中：标题在按钮上方，二者共享同一水平中轴 */
+    #result{ display:none;
+      position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+      flex-direction:column; align-items:center;
+      width:288px; padding:16px 14px; background:rgba(15,18,32,0.9); border-radius:10px;
+      color:#eef3ff; text-align:center; z-index:10;
+    }
+    .r-title{ font-size:20px; font-weight:bold; margin-bottom:6px; }
+    .r-score{ font-size:15px; margin-bottom:14px; }
+
+    .nextLabel{
+      position:absolute; top:12px; left:360px; width:90px; height:22px;
+      text-align:center; color:#cddaf0; font-size:15px; font-weight:bold;
+    }
+    #nextPiece{
+      position:absolute; top:34px; left:360px; width:90px; height:180px;
+    }
+
+    kbd{ display:inline-block; padding:2px 7px; background:#343e4b; border:1px solid #48597d; border-radius:4px; color:#cddaf0; font-size:13px; }
+
+    /* Mobile cross-key controls (映射 PC 键盘上下左右；移动设备无键盘时使用) - 3x3 grid symmetric cross */
+    .cross-grid{ position:fixed; bottom:10%; right:10%; z-index:20; display:grid; grid-template-columns:64px 64px 64px; grid-template-rows:64px 64px 64px; gap:8px; }
+    .ck-up{ grid-row:1; grid-column:2; }
+    .ck-left{ grid-row:2; grid-column:1; }
+    .ck-center{ grid-row:2; grid-column:2; display:none; }
+    .ck-right{ grid-row:2; grid-column:3; }
+    .ck-down{ grid-row:3; grid-column:2; }
+    .mk{ border:none; border-radius:12px; background:#3a7d5a; color:#fff; font-size:30px; cursor:pointer; transition:background .12s,opacity .12s; opacity:.7; width:64px; height:64px; display:flex; align-items:center; justify-content:center; }
+    .mk.pressed{ background:#4a9d6e; opacity:.9; }
+  </style>
+</head>
+<body>
+  <h1>🧱 俄罗斯方块 (Tetris)</h1>
+
+  <!-- 开局面板 -->
+  <div id="setup" class="setup">
+    <h2>对局设置</h2>
+    <div class="setup-row">
+      <span class="setup-label">难度模式</span>
+      <div class="choice-group" id="mode-group">
+        <button class="choice-btn selected" data-mode="classic">加速(原有)</button>
+        <button class="choice-btn" data-mode="wall">随机墙行</button>
+      </div>
+    </div>
+    <p class="setup-note">1. 经典模式: 消除行数越多，方块下落速度越快<br>2. 墙模式: 底部刷新随机行进行干扰</p>
+    <div class="setup-row" style="margin-bottom:0">
+      <button id="start-btn" class="btn-start">开始对局</button>
+    </div>
+  </div>
+
+  <!-- 游戏区 -->
+  <div id="game" style="display:none; flex-direction:column; align-items:center; gap:14px;">
+    <div class="controls">
+      <div class="hint-box">操作: <kbd>↑</kbd>旋转 <kbd>←→</kbd>移动 <kbd>↓</kbd>立即下降</div>
+      <div class="score-box">得分: <span id="score">0</span></div>
+      <button id="back-setup" class="btn-back">返回设置</button>
+    </div>
+
+    <div id="stage">
+      <canvas id="board"></canvas>
+      <div class="nextLabel">下一方块</div>
+      <canvas id="nextPiece"></canvas>
+      <div id="result">
+        <div class="r-title">对局结束 · 最终得分: <span id="finalScore"></span></div>
+        <button id="confirm-result" class="btn-back">返回设置</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 移动十字键控制(映射 PC 键盘上下左右；无键盘设备操作支持) - 3x3 grid对称十字 -->
+  <div id="mobileControls" class="cross-grid">
+    <button id="mk-up" class="mk ck-up" data-dir="up">↑</button>
+    <button id="mk-left" class="mk ck-left" data-dir="left">←</button>
+    <span class="ck-center"></span>
+    <button id="mk-right" class="mk ck-right" data-dir="right">→</button>
+    <button id="mk-down" class="mk ck-down" data-dir="down">↓</button>
+  </div>
+
+<script>
+(function(){
+  // 移动设备检测：以 (pointer:coarse) media query(触摸/粗指针设备为true)为准；UA兜底。仅此类显示十字键控制
+  const IS_MOBILE_DEVICE = matchMedia('(pointer:coarse)').matches
+      || /Android|iPhone|iPad|iPod|Windows[ -]Phone/i.test(navigator.userAgent);
+  if(!IS_MOBILE_DEVICE){ const mc=document.getElementById('mobileControls'); if(mc) mc.style.display='none'; }
+
+  const COLS = 10, ROWS = 20;
+  const CELL = 36;
+  const canvas = document.getElementById('board');
+  const ctx = canvas.getContext('2d');
+  canvas.width = COLS*CELL; canvas.height = ROWS*CELL;
+
+  const scoreEl = document.getElementById('score');
+  const setupEl = document.getElementById('setup');      // 开局面板 (首次加载/游戏结束后显示)
+  const gameEl = document.getElementById('game');        // 游戏区 (对局中显示)
+  const backSetupBtnEl = document.getElementById('back-setup');   // 对局内"返回设置"按钮
+  const nextCanvasEl = document.getElementById('nextPiece');
+  const nctx = nextCanvasEl ? nextCanvasEl.getContext('2d') : null;
+  if(nextCanvasEl){ nextCanvasEl.width=90; nextCanvasEl.height=180; }
+  const resultEl = document.getElementById('result');   // 结算屏(纵向居中布局)
+
+  let started = false;
+  let clearedRows = 0;
+  let gameMode = 'classic';   // classic=加速模式(原有); wall=随机墙行难度模式 (由开局面板的选择决定)
+  let wallThreshold = null;    // 仅wall模式: 距下一次随机墙触发还需消除的行数(初始按WALL_SEQUENCE[0],之后按序列取值,最小2)
+  let wallPending = 0;          // 仅wall模式: 上次触发后累计已消除的行数 — 用于判定是否达到触发所需行数
+  let wallTriggerIdx = 0;       // 仅wall模式: 本次对局已触发的随机墙次数, 按序取值WALL_SEQUENCE下标(每次重开归零)
+  let nextPreviewType = 0;
+
+  let grid = makeGrid();
+  let score = 0;
+  let gameOver = false;
+
+  function makeGrid(){
+    const g=[];
+    for(let r=0;r<ROWS;r++){ g.push(new Array(COLS).fill(0)); }
+    return g;
+  }
+
+  // rotate cells 90deg clockwise: (x,y)->(-y,x), normalize to min x/y = 0
+  function rotateCells(cells){
+    let nc = cells.map(c=>[-c[1], c[0]]);
+    let minX=Infinity, minY=Infinity;
+    for(const [x,y] of nc){ if(x<minX)minX=x; if(y<minY)minY=y; }
+    return nc.map(([x,y])=>[x-minX, y-minY]);
+  }
+
+  const BASE_SHAPES = [
+    [[0,0],[1,0],[2,0],[3,0]],            // I (line)
+    [[0,0],[1,0],[0,1],[1,1]],             // O (square)
+    [[0,0],[0,1],[1,1],[2,1]],             // L right-handed
+    [[2,0],[0,1],[1,1],[2,1]],             // L left-handed (mirror)
+    [[1,0],[0,1],[1,1],[2,1]],             // T/Y (3-in-row + center bump)
+    [[0,0],[1,0],[1,1],[2,1]],             // S step (chirality A)
+    [[1,0],[2,0],[0,1],[1,1]]              // S step (chirality B, mirror)
+  ];
+
+  const COLORS = ['#f53b3b','#ff8e1a','#ffd024','#2ec94c','#1fa6d9','#2775f5','#9b38e6']; // standard: red, orange, yellow, green, cyan, blue, purple
+  const WALL_SEQUENCE = [10,9,8,7,6,6,5,5,5,4,4,4,4,3,3,3,3,3,2]; // wall模式:触发刷新所需的消除行数序列(第N次触发的所需值), 之后稳定在最小值2
+
+  function isSameSet(a,b){
+    const sa=a.map(c=>c.join(',')).sort().join('|');
+    const sb=b.map(c=>c.join(',')).sort().join('|');
+    return sa===sb;
+  }
+
+  // precompute all unique rotations for each base shape
+  function computeRotations(base){
+    let frames=[base];
+    let cur=base;
+    for(let i=0;i<3;i++){
+      cur=rotateCells(cur);
+      if(!isSameSet(cur,frames[0])) frames.push(cur);
+      else break;
+    }
+    return frames;
+  }
+
+  const SHAPES = BASE_SHAPES.map(computeRotations);
+
+  let piece=null, pieceTimer=null;
+
+  // ---- 视觉补间动画（纯视觉效果，不影响游戏逻辑）----
+  const TWEEN_MS = 100;       // 所有补间统一的固定时长(毫秒)
+  let viewPos = { x: 0, y: 0 };   // 当前方块在画布上的视觉坐标（可为小数）
+  let activeTween = null;         // 活动补间对象：{ fromX,fromY,toX,toY,startTime }
+  let rafId = null;
+
+  const WALL_POP_MS = TWEEN_MS * 2;   // pop-up动画统一固定时长(毫秒)，纯视觉层不影响逻辑
+  let wallPopState = null;            // { startTime, cols:[number] } —随机墙新生成方块的pop-up动画状态（纯视觉层，不影响grid/wallTriggerCheck等）
+
+  function easeOut(t){ return 1 - Math.pow(1-t,3); }   // ease-out-cubic，先快后慢
+
+  function startGameLoop(){            // 启动持续的重绘循环（驱动补间与渲染）
+    if(!rafId){ rafId = requestAnimationFrame(function loop(){ updateTween(); updateClear(); render(); if(!gameOver){ requestAnimationFrame(loop); } }); }
+  }
+
+  function startTween(ox, oy){        // 从当前视觉位置平滑移动到 (ox,oy)，统一固定时长 TWEEN_MS
+    if(!piece) return;
+    activeTween = { fromX: viewPos.x, fromY: viewPos.y, toX: ox, toY: oy, startTime: performance.now() };
+    startGameLoop();
+  }
+
+  function updateTween(){              // rAF每帧调用：推进补间并更新视觉坐标，返回是否仍在动画中
+    if(!activeTween){ return false; }
+    const elapsed = performance.now() - activeTween.startTime;
+    let t = Math.min(1, elapsed / TWEEN_MS);   // 统一固定时长，不再按移动距离计长
+    if(t >= 1){
+      viewPos.x = activeTween.toX; viewPos.y = activeTween.toY;   // 精确落点
+      activeTween = null;
+      return false;
+    }
+    const e = easeOut(t);
+    viewPos.x = activeTween.fromX + (activeTween.toX - activeTween.fromX) * e;
+    viewPos.y = activeTween.fromY + (activeTween.toY - activeTween.fromY) * e;
+    return true;
+  }
+
+  function currentCells(){
+    return SHAPES[piece.type][piece.rot];
+  }
+
+  function isValid(cells, offX, offY){
+    for(const [x,y] of cells){
+      const bx=x+offX, by=y+offY;
+      if(bx<0||bx>=COLS||by>=ROWS) return false;
+      if(by>=0 && grid[by][bx]) return false;
+    }
+    return true;
+  }
+
+  function spawnPiece(){
+    piece={type:nextPreviewType, rot:0};
+    nextPreviewType=Math.floor(Math.random()*SHAPES.length);
+    if(nctx) renderNextPiece();
+    const cells=SHAPES[piece.type][piece.rot];
+    let minX=Infinity,maxX=-1,minY=Infinity,maxY=-1;
+    for(const [x,y] of cells){ if(x<minX)minX=x; if(x>maxX)maxX=x; if(y<minY)minY=y; if(y>maxY)maxY=y; }
+    const w=maxX-minX+1, h=maxY-minY+1;
+    piece.offX=Math.floor((COLS-w)/2)-minX;
+    piece.offY=0-minY; // start at top row of its bounding box
+    if(!isValid(currentCells(),piece.offX,piece.offY)){ endGame(); return; }   // 棋盘满 → 判负(随后返回设置界面)
+    viewPos.x=piece.offX; viewPos.y=piece.offY;   // 新方块从正确位置出现，避免"飘入"
+    activeTween = null;   // 清空旧补间，避免其拉动新方块的视觉坐标（落定后不再残留动画）
+  }
+
+  function lockPiece(){
+    const cells=currentCells();
+    for(const [x,y] of cells){
+      const bx=x+piece.offX, by=y+piece.offY;
+      if(by>=0&&by<ROWS&&bx>=0&&bx<COLS) grid[by][bx]=COLORS[piece.type];
+    }
+    startFullClearSequence();
+    render();
+  }
+
+  function lockBoard() {      // 将当前方块的落定位写入网格并消除满行（供 drop/重力落定使用）
+    const cells = currentCells();
+    for (const [x, y] of cells) {
+      const bx = x + piece.offX, by = y + piece.offY;
+      if (by >= 0 && by < ROWS && bx >= 0 && bx < COLS) grid[by][bx] = COLORS[piece.type];
+    }
+    startFullClearSequence();
+}
+
+let dropResult = null;   // 缓存被按下方向键降落的旧方块：落定位行号 y + cells（重力推进不改变该落定）
+
+// ---- 消除动画（逐行高光：整行 remove 前叠加一层渐入后又渐出的高光，播完再清除该行并继续逻辑）----
+let clearingRows = [];   // 待消除的行号列表（降序，从底部往顶部处理每行）
+let clearTween = null;   // { startTime } —— 本轮整闪白时间轴；覆盖全部被消行的统一时长
+let clearOpacity = 0;    // 当前整闪白高光强度(渐入后渐出)，仅在 render() 里用于叠加白色高光
+let clearCount = 0;      // 本轮消除的满行总数（用于非线性奖励，finishDrop 统一计分）
+
+function startFullClearSequence(){      // 触发消除：收集满行、统一整闪白（覆盖全部被消行）、播完后掉落重排并计分
+  const full=[];
+  for(let r=0;r<ROWS;r++) if(grid[r].every(c=>c)) full.push(r);
+  clearCount = full.length;              // 记录本轮消除的总行数（用于非线性奖励，收尾统一计分）
+  clearingRows = full.sort((a,b)=>b-a);   // 降序：从底部开始整闪白
+  if(clearingRows.length){ startFlash(); } else { finishDrop(); }
+}
+
+function startFlash(){                     // 启动整闪白：覆盖全部被消行(降序)，统一时间轴时长 TWEEN_MS
+  clearTween = { startTime: performance.now() };   // 单轮整闪白时间轴（与方块补间一致）
+  render();                               // 先呈现所有行都被高光的画面，动画播完后整体掉落重排
+  setTimeout(finishDrop, TWEEN_MS);      // 整闪白播完→dropClearGrid掉落+计分(刷新新块、重启重力)
+}
+
+function drawRowHighlight(row, alpha){    // 在每行(降序)的整宽前景叠加白色高光（透明度 alpha）
+  if(alpha <= 0 || row < 0 || row >= ROWS) return;
+  const saved = ctx.globalAlpha;
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(2, row*CELL+2, COLS*CELL-4, CELL-4);   // cell 留 gap，铺满该行
+  ctx.globalAlpha = saved;
+}
+
+function updateClear(){                   // rAF每帧调用：推进整闪白并更新 clearOpacity(渐入后渐出)
+  if(!clearTween){ clearOpacity = 0; return; }
+  const elapsed = performance.now() - clearTween.startTime;
+  let t = Math.min(1, elapsed / TWEEN_MS);   // 整闪白统一固定时长（与方块补间一致）
+  clearOpacity = Math.sin(Math.PI * t);      // ease-in-out 钟形曲线：渐入后渐出
+  if(t >= 1){ clearTween = null; }
+}
+
+
+
+
+function finishDrop(){                    // TWEEN_MS后：整闪白播完→真正清空并掉落重排、统一计分、刷新新方块并重启重力
+  if(gameOver){ return; }                 // 游戏结束后不再刷新一块，避免自维持的持续堆积循环
+  const n = clearCount;                  // 本轮消除的总行数（用于非线性奖励）
+  clearingRows = [];
+  clearOpacity = 0;
+  if(n > 0){ dropClearGrid(); }           // filter+unshift让上方方块整体下移一格（消除后掉落）
+  if(n>0){ score += 10 + Math.max(n-1,0) * 15; clearedRows += n; }   // nonlinear reward: 1->10, 2->25, 3->40, 4->55
+  scoreEl.textContent = score;
+  wallTriggerCheck();                      // wall难度模式: 按已消除行数触发底部插入随机墙(初始10行,每次触发后所需-1最小2;溢出即判负)
+  if(gameOver){ return; }                  // 本轮触发导致判负 → 已回到设置界面，不再刷新新方块/重启重力
+  spawnPiece();                            // 刷新新方块（只刷一次）
+  updateGravity();                         // 重启重力推进
+}
+
+function dropClearGrid(){                  // 移除所有满行并让剩余方块整体下移一格后补顶部空行（消除后掉落重排）
+  const full=[];
+  for(let r=0;r<ROWS;r++) if(grid[r].every(c=>c)) full.push(r);
+  const kept = grid.filter((_, i) => !full.includes(i));   // 保留非满行
+  while(kept.length < ROWS) kept.unshift(new Array(COLS).fill(0));   // 顶部补空行以维持ROWS行
+  grid = kept;
+}
+
+function insertRandomWallRow(){           // 底部插入操作(wall难度模式的单次触发): 在底行位置生成含1-3个空格的新行(其余为随机颜色方块),
+                                           // 并将当前界面中全部现有内容向上推一格; 若任何块因此越出顶部边界 → 立即判负。
+  for(let c=0;c<COLS;c++){ if(grid[0][c]) { endGame(); return; } }             // 顶部行含任何块 → 上推即溢出 → 判负
+  const k = 1 + Math.floor(Math.random()*3);                                  // 该行空格数: 随机取1~3(含两端)
+  const idxs=[]; for(let i=0;i<COLS;i++) idxs.push(i);
+  for(let i=0;i<COLS;i++){ const j=Math.floor(Math.random()*(i+1)); [idxs[i],idxs[j]]=[idxs[j],idxs[i]]; }   // Fisher-Yates: shuffle后前k个列号=空格位置
+  const wallRow=new Array(COLS).fill(0);                                    // 新行: k个随机位置为空格, 其余全部填充随机颜色方块
+  const wallPopCols=[];                                                        // 记录本轮新生墙方块的列索引，供纯视觉pop-up动画使用（不影响逻辑）
+  for(let c=0;c<COLS;c++){ if(!idxs.slice(0,k).includes(c)) { wallRow[c]=COLORS[Math.floor(Math.random()*COLORS.length)]; wallPopCols.push(c); } }
+  const newGrid=[];                                                        // 上推一格: grid[r]→grid[r-1]; 旧顶行已验证为空, 无损失
+  for(let r=1;r<ROWS;r++) newGrid.push(grid[r]);
+  newGrid.push(wallRow);                                                    // 底行位置放置新随机墙行(总行数不变)
+  grid=newGrid;
+  if(wallPopCols.length){ wallPopState = { startTime: performance.now(), cols: wallPopCols }; }   // 启动纯视觉pop-up状态；游戏逻辑(grid/wallTriggerCheck等)不受影响
+}
+
+function wallTriggerCheck(){             // wall难度模式(wall): 由已消除行数触发的底部插入机制。
+                                       // 规则: 触发所需消除行数按WALL_SEQUENCE progression; 在棋盘最底行位置生成含1-3个空格的新行(其余为随机颜色方块),并将现有内容上推一格;若任何块越出顶部边界 → 立即判负。
+                                       // 每次触发后下次所需行数按序列取值,最小2。同一回合消除多行时按累计值连续判定(不重置计数)。
+  if(gameMode !== 'wall') return;                     // classic模式不参与此机制
+  const n = clearCount;                                 // 本轮刚消除的行数
+  if(n <= 0) return;                                  // 未发生消除的回合: 不做任何事(绝不触碰阈值)
+  if(wallThreshold == null){ wallThreshold = WALL_SEQUENCE[0]; wallTriggerIdx = 0; }   // 初始所需行数=10 (仅当本模式尚未触发过)
+  wallPending += n;                                   // 累计"上次触发后已消除的行数"
+  while(wallPending >= wallThreshold){               // 达到所需行数 → 触发; 触发后用更新后的所需值继续判定
+    insertRandomWallRow();                            // 底部插入随机墙行 + 全部内容上推一格(溢出即判负)
+    if(gameOver) return;                              // 上一操作已判负 → 本轮不再继续触发
+    wallPending -= wallThreshold;                   // 扣除本次触发已消耗的行数(剩余部分计入下次判定, 不重置计数)
+    wallTriggerIdx++;                                 // 记录一次完整触发
+    const nextReq = WALL_SEQUENCE[Math.min(wallTriggerIdx, WALL_SEQUENCE.length - 1)];
+    wallThreshold = nextReq < 2 ? 2 : nextReq;        // 所需行数按序列取值，最小为2
+  }
+}
+
+function finishLock() {     // TWEEN_MS后执行：先落定(用缓存的行号)、再逐行高光消除、播完刷新新方块
+    setTimeout(() => {
+      if (dropResult) {
+        const saved = dropResult;
+        dropResult = null;          // consume once AFTER saving - prevents any second queued timeout from re-locking / writing phantom blocks
+        piece.offY = saved.offY;   // 锁定旧方块的最终落定位（不受重力推进影响）
+        lockBoard();                 // 用缓存的 cells/行号落定 + startFullClearSequence
+      }
+    }, TWEEN_MS);
+}
+
+  function renderNextPiece(){
+    nctx.clearRect(0,0,nextCanvasEl.width,nextCanvasEl.height);
+    const cells=SHAPES[nextPreviewType][0];
+    let minX=Infinity,maxX=-1,minY=Infinity,maxY=-1;
+    for(const [x,y] of cells){ if(x<minX)minX=x; if(x>maxX)maxX=x; if(y<minY)minY=y; if(y>maxY)maxY=y; }
+    const w=maxX-minX+1, h=maxY-minY+1;
+    const cs=20; // fixed cell size so all shapes render at consistent scale
+    const p=Math.max(1,Math.round(cs*0.08));
+    const sz=cs-2*p;
+    const boxW=w*cs, boxH=h*cs;
+    const ox=(90 - boxW)/2 - minX*cs;
+    const oy=12 - minY*cs;
+    nctx.fillStyle=COLORS[nextPreviewType];
+    for(const [x,y] of cells){
+      const bx=Math.round(ox+x*cs+p);
+      const by=Math.round(oy+y*cs+p);
+      nctx.fillRect(bx,by,sz,sz);
+    }
+  }
+
+  function clearLines(){
+    let full=[];
+    for(let r=0;r<ROWS;r++) if(grid[r].every(c=>c)) full.push(r);
+    if(full.length){
+      const kept=grid.filter((_,i)=>!full.includes(i));
+      while(kept.length<ROWS) kept.unshift(new Array(COLS).fill(0));
+      grid=kept;
+      score += 10 + (full.length-1)*15; // nonlinear reward: 1->10, 2->25, 3->40, 4->55
+      clearedRows += full.length;
+      scoreEl.textContent=score;
+    }
+    updateGravity();
+  }
+
+  function updateGravity(){
+    // nonlinear acceleration: each time 5 rows are cleared, multiply base interval by 0.9 (10% faster)
+    const baseInterval=1000;
+    const level=Math.floor(clearedRows/5);
+    if(gameMode === 'wall'){ interval = baseInterval; }                    // wall模式: 下落间隔恒为基础值, 永不加速
+    else{ interval = Math.max(TWEEN_MS, baseInterval * Math.pow(0.9, level)); }   // classic模式: currentInterval最小=TWEEN_MS，避免逻辑帧推进快于补间动画
+    if(pieceTimer) clearInterval(pieceTimer);
+    pieceTimer=setInterval(()=>{
+      if(gameOver){ clearInterval(pieceTimer); pieceTimer=null; return; }   // 游戏结束后立即停止重力推进
+      const cells=currentCells();
+      if(isValid(cells, piece.offX, piece.offY+1)){ piece.offY++; startTween(piece.offX,piece.offY); }   // 自动下落的补间动画(单格)
+      else { lockPiece(); }
+    }, interval);
+  }
+
+  function dropInstant(){
+    if(!piece||gameOver) return;
+    const cells=currentCells();
+    let y=piece.offY;
+    while(isValid(cells, piece.offX, y+1)) y++;
+    dropResult = { cells, offY: y };   // 缓存旧方块的落定位行号 + cells（重力推进不改变该落定）
+    startTween(piece.offX, y);         // 启动旧方块从当前位置到底部(y)的补间动画，立即落定/消除
+    render();                             // 渲染一帧静态图（viewPos=旧位置，grid里尚无旧方块的落定位→无残影）
+    finishLock();                         // 等补间播完：先定格+消除满行、再刷新新方块
+  }
+
+  function moveLeftRight(dx){
+    if(!piece||gameOver) return;
+    const cells=currentCells();
+    if(isValid(cells, piece.offX+dx, piece.offY)){ piece.offX+=dx; startTween(piece.offX,piece.offY); }   // 左右移动的补间动画
+  }
+
+  function rotatePiece(){
+    if(!piece||gameOver) return;
+    const base=SHAPES[piece.type];
+    const nextRot=(piece.rot+1)%base.length;
+    for(const [ox,oy] of [[0,0],[-1,0],[1,0],[0,-1],[0,1],[-2,0],[2,0]]){
+      if(isValid(SHAPES[piece.type][nextRot], piece.offX+ox, piece.offY+oy)){
+        piece.rot=nextRot; piece.offX+=ox; piece.offY+=oy; render(); return;
+      }
+    }
+  }
+
+  function render(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.strokeStyle='#25314d'; ctx.lineWidth=1;
+    for(let x=0;x<=COLS;x++){ ctx.beginPath(); ctx.moveTo(x*CELL,0); ctx.lineTo(x*CELL,ROWS*CELL); ctx.stroke(); }
+    for(let y=0;y<=ROWS;y++){ ctx.beginPath(); ctx.moveTo(0,y*CELL); ctx.lineTo(COLS*CELL,y*CELL); ctx.stroke(); }
+    const popSet = wallPopState ? new Set(wallPopState.cols.map(c=>`${ROWS-1},${c}`)) : null;   // 随机墙行新方块的列集（纯视觉层，render循环跳过以免重复绘制）
+    for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){ if(grid[r][c] && !(popSet && popSet.has(`${r},${c}`))) drawCell(c,r,grid[r][c]); }
+    if(piece && !gameOver){
+      const cells=currentCells();
+      for(const [x,y] of cells){
+        const bx=x+viewPos.x, by=y+viewPos.y;   // 用视觉坐标呈现补间动画
+        if(by>=0&&by<ROWS&&bx>=0&&bx<COLS) drawCell(bx,by,COLORS[piece.type]);
+      }
+    }
+    if(wallPopState){ // 随机墙新生方块的pop-up动画(纯视觉层):淡入+向上弹回缩放，逻辑grid unaffected
+      const elapsed = performance.now() - wallPopState.startTime;
+      let t = Math.min(1, elapsed / WALL_POP_MS);
+      if(t >= 1){ wallPopState = null; }   // pop-up动画结束
+      else{
+        const e = easeOut(Math.min(1,t));
+        const bounce = Math.sin(Math.PI * t);            // 钟形曲线：两端0、中点≈1，制造"向上弹起再回落原位"的pop质感
+        const scale = 0.5 + 0.5*e;                       // 从一半尺寸放大到完整(配合easeOut先快后慢)
+        for(const c of wallPopState.cols){
+          const baseY = (ROWS-1)*CELL;
+          const cy = baseY - bounce * CELL*0.22;         // 向上弹回目标行位置
+          drawPopCell(c, ROWS-1, grid[ROWS-1][c], scale, cy);
+        }
+      }
+    }
+    if(clearTween){ for(const y of clearingRows){ drawRowHighlight(y, clearOpacity); } }   // 整闪白覆盖全部被消行（渐入后渐出）
+  }
+
+  function drawCell(c,r,color){
+    const x=c*CELL,y=r*CELL,p=2;
+    ctx.fillStyle=color;
+    ctx.fillRect(x+p,y+p,CELL-2*p,CELL-2*p);
+    ctx.fillStyle='rgba(255,255,255,0.18)';
+    ctx.fillRect(x+p,y+p,CELL-2*p,(CELL-2*p)*0.35);
+  }
+
+  function drawPopCell(c,r,color,scale,cy){ // 纯视觉层:绘制随机墙新生方块的pop-up动画（缩放+淡入，不改动grid逻辑）
+    ctx.save();
+    const x=c*CELL;
+    const cx = x + CELL/2;
+    const drawCenterY = (cy != null ? cy : r*CELL) + CELL/2;
+    ctx.globalAlpha = Math.min(1, 0.5 + 0.5*scale);   // 淡入：scale从0.5→1，透明度0.5→1
+    const sw = (CELL-4)*scale, sh=(CELL-4)*scale;
+    const sx = cx - sw/2, sy = drawCenterY - sh/2;
+    ctx.fillStyle=color;
+    ctx.fillRect(sx, sy, sw, sh);
+    // 高光效果，与drawCell一致的比例
+    ctx.fillStyle='rgba(255,255,255,0.18)';
+    ctx.fillRect(sx, sy, sw, sh*0.35);
+    ctx.restore();
+  }
+
+  function showToSetup(){   // 返回设置界面: 重置全部状态并显示开局面板 (首次加载 / 游戏结束后 / 对局内主动返回)
+    started=false; gameOver=true; score=0; clearedRows=0; wallThreshold=null; wallPending=0; wallTriggerIdx=0; grid=makeGrid();
+    if(pieceTimer){ clearInterval(pieceTimer); pieceTimer=null; }
+    rafId = null;
+    setupEl.style.display='block';   // 显示设置界面
+    gameEl.style.display='none';     // 隐藏游戏区
+  }
+
+  function endGame(){   // Game over -> show settlement screen; player confirms before returning to settings (NOT immediate jump)
+    gameOver=true;
+    if(pieceTimer){ clearInterval(pieceTimer); pieceTimer=null; }
+    rafId = null;
+    document.getElementById('finalScore').textContent=String(score);   // 结算屏显示本局最终得分
+    resultEl.style.display='flex';      // Show the settlement overlay on top of the board
+  }
+
+  function goSetup(){        // 对局内"返回设置": 中止当前对局并回到开局面板 (同 gomoku/othello 的 goSetup 做法)
+    showToSetup();
+  }   
+
+  function startFromSetup(){   // 读取开局面板上所选难度模式, 重置状态, 隐藏设置界面显示游戏区, 开始新对局
+    const sel=document.querySelector('#mode-group .choice-btn.selected');
+    if(sel) gameMode = sel.dataset.mode;      // classic=加速(原有); wall=随机墙行
+    setupEl.style.display='none';            // 隐藏设置界面, 显示游戏区
+    gameEl.style.display='flex';
+    grid=makeGrid(); score=0; gameOver=false; clearedRows=0; started=true;
+    wallThreshold=null; wallPending=0; wallTriggerIdx=0;   // 重置wall模式触发状态(每次重开按WALL_SEQUENCE初始值/计数清零)
+    resultEl.style.display='none';   // Hide the settlement screen before a new match
+    scoreEl.textContent='0';
+    spawnPiece(); updateGravity(); render(); startGameLoop();   // 启动补间渲染循环
+  }
+
+  document.addEventListener('keydown', e=>{
+    if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) e.preventDefault();
+    if(!started) return;                    // While on the settings screen (match not started), don't respond to game keys
+    switch(e.key){
+      case 'ArrowUp': rotatePiece(); break;
+      case 'ArrowLeft': moveLeftRight(-1); break;
+      case 'ArrowRight': moveLeftRight(1); break;
+      case 'ArrowDown': dropInstant(); break;
+      case 'Enter': if(gameOver) showToSetup(); break; // 游戏结束(settlement屏): Enter触发返回设置
+    }
+  });
+
+  // 移动十字键控制(映射 PC 键盘上下左右到游戏动作; onPress态用于视觉反馈)
+  document.querySelectorAll('#mobileControls .mk').forEach(btn=>{
+    const press=()=>btn.classList.add('pressed');
+    const release=()=>btn.classList.remove('pressed');
+    btn.addEventListener('pointerdown', press);
+    btn.addEventListener('pointerup', release);
+    btn.addEventListener('pointerleave', release);
+    btn.addEventListener('click', e=>{
+      if(!started || gameOver) return;
+      const d=btn.dataset.dir;
+      if(d==='up') rotatePiece();
+      else if(d==='down') dropInstant();
+      else if(d==='left') moveLeftRight(-1);
+      else if(d==='right') moveLeftRight(1);
+    });
+  });
+
+  function fitStage(){
+    const stage=document.getElementById('stage');
+    if(!stage) return;
+    // flex-column layout stacks h1 + controls above #stage; leave safe margins
+    const infoH=120, bottomMargin=40;
+    const availW=window.innerWidth-48, availH=window.innerHeight-infoH-bottomMargin;
+    let s=Math.min(availW/450, availH/720);
+    s=Math.max(0.35, Math.min(s, 1.4));
+    // Use CSS zoom (not transform): it shrinks the actual layout so the scene fits
+
+    // without overflow - transforms only scale rendering and leave full-size flow boxes,
+
+    // which is what caused clipping in small windows.
+
+    const gameEl=document.getElementById('game');
+
+    if(gameEl) gameEl.style.zoom=s;   // scales layout + rendering together -> no overflow, always fits
+  }
+  window.addEventListener('resize', fitStage);
+  // Difficulty mode toggle: click buttons move the selected marker (startFromSetup reads this selection)
+  document.querySelectorAll('#mode-group .choice-btn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      document.querySelectorAll('#mode-group .choice-btn').forEach(b=>b.classList.remove('selected'));
+      btn.classList.add('selected');
+    });
+  });
+  document.getElementById('start-btn').addEventListener('click', startFromSetup);   // "Start Match" on the settings panel
+  backSetupBtnEl.addEventListener('click', goSetup);                              // Return to settings inside a match
+resultEl.querySelector('#confirm-result').addEventListener('click', ()=>{ showToSetup(); });   // Settlement confirm -> back to setup                              // "Return to Settings" inside a match
+
+  showToSetup();   // Initial load → display the settings screen (replaces old initPage)
+  fitStage();
+})();
+</script>
+</body>
+</html>

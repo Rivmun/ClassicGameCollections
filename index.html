@@ -112,7 +112,7 @@ body {
   <h2>选择游戏</h2>
   <div class="game-list">
     <div class="game-item" data-game="gomoku">
-      <span class="icon">⚫⚪</span>
+      <span class="icon">🎯</span>
       <div class="info">
         <div class="name">五子棋</div>
         <div class="desc">五连制胜 · 进攻/防守难度 · 禁手规则</div>
@@ -121,7 +121,7 @@ body {
     </div>
 
     <div class="game-item" data-game="othello">
-      <span class="icon">🀄</span>
+      <span class="icon">⚫⚪</span>
       <div class="info">
         <div class="name">黑白棋</div>
         <div class="desc">经典翻转对战 · 三档 AI 难度</div>
@@ -155,6 +155,15 @@ body {
       </div>
       <button class="play" >开始</button>
     </div>
+
+    <div class="game-item" data-game="tetris">
+      <span class="icon">🧱</span>
+      <div class="info">
+        <div class="name">俄罗斯方块</div>
+        <div class="desc">加速 / 墙行两种模式 · 经典堆叠</div>
+      </div>
+      <button class="play" >开始</button>
+    </div>
   </div>
 </div>
 
@@ -170,7 +179,8 @@ const GAMES = {
   othello: 'game/othello.html',
   sum10:   'game/Sum10.html',
   mines:   'game/mine-sweeper.html',
-  snake:   'game/snake.html'
+  snake:   'game/snake.html',
+   tetris:  'game/tetris.html'
 };
 
 const frame     = document.getElementById('game-frame');
